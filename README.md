@@ -26,7 +26,7 @@ powershell -ExecutionPolicy Bypass -File .\installer\bootstrap.ps1 -Browser Edge
 
 1. 验证 Python、技能和扩展的文件完整性。
 2. 将技能链接到 `~\.agents\skills\bookmark-organizer`；若无法创建链接则复制。
-3. 将 Edge 扩展复制到 `D:\Microsoft-Edge\Local-Extensions\bookmark-organizer`；没有 D 盘时使用本机 AppData 目录。
+3. 将 Edge 扩展复制到 `D:\Microsoft-Edge\Local-Extensions\bookmark-organizer`；没有 D 盘时使用 `%LOCALAPPDATA%\BrowserLocalExtensions\Microsoft-Edge\bookmark-organizer`。传入 `-Browser Chrome` 时，对应目录名为 `Google-Chrome`。
 4. 输出下一步的人为确认操作，并可打开 `edge://extensions`。
 
 ### 唯一必须由人确认的步骤
@@ -70,7 +70,10 @@ python .\.agents\skills\bookmark-organizer\scripts\audit_bookmarks.py `
 
 ```powershell
 .\installer\doctor.ps1 -Browser Edge
+# 使用 Chrome 时：.\installer\doctor.ps1 -Browser Chrome
 ```
+
+自检会核验扩展名称、Manifest V3、最低版本 `0.2.0`，以及 `bookmarks`、`downloads` 两项必要权限。
 
 - 更新仓库后，如需覆盖扩展源码，显式运行 `bootstrap.ps1 -Browser Edge -UpdateExtension`，然后在 Edge 扩展页点击“重新加载”。
 - 如果全局技能已存在，安装脚本不会覆盖它；这是为了保护你本机的定制。可以先比较差异后再手动迁移。

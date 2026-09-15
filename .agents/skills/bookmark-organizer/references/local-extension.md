@@ -4,14 +4,14 @@
 
 ## 使用前校验
 
-优先运行仓库的 `installer/doctor.ps1 -Browser Edge`。若需要直接检查扩展源目录，确认 `manifest.json` 同时满足：
+Edge 优先运行仓库的 `installer/doctor.ps1 -Browser Edge`；Chrome 使用 `installer/doctor.ps1 -Browser Chrome`。该脚本会检查 `manifest.json` 是否同时满足：
 
 - `name` 为 `收藏夹整理助手（本地）`；
 - `manifest_version` 为 `3`；
 - 版本不低于 `0.2.0`；
 - `permissions` 同时包含 `bookmarks` 与 `downloads`。
 
-本机默认安装位置通常为 `D:\Microsoft-Edge\Local-Extensions\bookmark-organizer`；若没有 D 盘，安装器会改用本机 AppData 目录。不要依据扩展 ID 判断身份：解压缩扩展移动目录后 ID 可能变化，应以清单内容校验。
+有 D 盘时，默认位置分别是 `D:\Microsoft-Edge\Local-Extensions\bookmark-organizer` 和 `D:\Google-Chrome\Local-Extensions\bookmark-organizer`。没有 D 盘时，分别使用 `%LOCALAPPDATA%\BrowserLocalExtensions\Microsoft-Edge\bookmark-organizer` 和 `%LOCALAPPDATA%\BrowserLocalExtensions\Google-Chrome\bookmark-organizer`。不要依据扩展 ID 判断身份：解压缩扩展移动目录后 ID 可能变化，应以清单内容校验。
 
 ## 执行边界
 

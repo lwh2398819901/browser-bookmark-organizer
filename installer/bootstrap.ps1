@@ -63,7 +63,14 @@ if (Test-Path -LiteralPath $extensionTarget) {
 }
 
 $manifest = Get-Content -LiteralPath (Join-Path $extensionTarget 'manifest.json') -Encoding utf8 -Raw | ConvertFrom-Json
-if ($manifest.manifest_version -ne 3 -or -not $manifest.permissions.Contains('bookmarks')) { throw 'Extension manifest validation failed.' }
+$expectedName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('5pS26JeP5aS55pW055CG5Yqp5omL77yI5pys5Zyw77yJ'))
+$versionValid = $false
+try { $versionValid = ([version]$manifest.version -ge [version]'0.2.0') } catch { $versionValid = $false }
+$permissions = @($manifest.permissions)
+if ($manifest.name -ne $expectedName -or $manifest.manifest_version -ne 3 -or -not $versionValid -or
+    -not ($permissions -contains 'bookmarks') -or -not ($permissions -contains 'downloads')) {
+    throw 'Extension manifest validation failed.'
+}
 Write-Status "Extension validated: $($manifest.name) v$($manifest.version)"
 
 Write-Host "`nManual browser confirmation is still required:" -ForegroundColor Yellow
