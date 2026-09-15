@@ -116,6 +116,10 @@ node .\tests\test_manager.js
 - 如果全局技能已存在，安装脚本不会覆盖它；这是为了保护你本机的定制。可以先比较差异后再手动迁移。
 - 不要将真实 `Bookmarks`、HTML 导出、审计结果或深度画像提交到 Git；`.gitignore` 已覆盖常见情况。
 
+## 开源许可
+
+本项目采用 [MIT License](LICENSE)。欢迎 fork、修改、重新发布和商用，无需事先申请或通知作者；再分发时请保留许可证和版权声明。
+
 ## 目录说明
 
 - `.agents/skills/bookmark-organizer/`：跨 Agent 共用的技能、脚本与规范。
