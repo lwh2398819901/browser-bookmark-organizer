@@ -37,7 +37,7 @@ python scripts/audit_bookmarks.py --input <source> --output-dir <report-director
 
 ## 改动规则
 
-- Edge 运行时不得编辑 Chromium 正在使用的 `Bookmarks` 文件。实时批量移动只能使用本技能配套的本地扩展 **`收藏夹整理助手（本地）`** 的 `chrome.bookmarks` API；不得把任何名称相近或功能相似的第三方扩展当作执行器。执行器的位置、版本和校验方式见[本地执行扩展](references/local-extension.md)；离线整理则生成新的 HTML 导入文件。
+- 浏览器（例如 Edge）运行期间，不得直接编辑其正在使用的 Chromium `Bookmarks` 文件。实时批量移动只能使用本技能配套的本地扩展 **`收藏夹整理助手（本地）`** 的 `chrome.bookmarks` API；不得把任何名称相近或功能相似的第三方扩展当作执行器。执行器的位置、版本和校验方式见[本地执行扩展](references/local-extension.md)；离线整理则生成新的 HTML 导入文件。
 - 通过扩展执行任何移动前，必须先创建完整收藏夹 HTML 归档并等待成功；归档失败时停止改动。扩展归档保留最近 30 份，且只能清理它自己创建的最早归档。
 - 保持源导出文件不变。离线重组写入新的同级输出文件。
 - 仅在用户已授权删除时，才可自动移除精确重复 URL。近似重复、重定向或不可用链接都必须先给出可复核清单并获得明确决定。
