@@ -62,6 +62,8 @@ python installer/install.py --browser edge
 python installer/install.py --browser edge --update-extension --update-skill
 ```
 
+更新扩展时，安装器会先在同一磁盘创建并校验完整临时副本，成功后再替换旧目录；失败时自动恢复旧版本。这样可以清除上一版本已经移除的文件，避免新旧文件混用。Windows 目录联接（junction）也会按目录链接识别，不会被误当成普通技能目录合并复制。
+
 脚本结束后仍需用户在浏览器扩展页开启开发者模式并“加载已解压的扩展程序”。这是所有操作系统都保留的人机安全确认。不同 Agent 对共享技能目录的发现方式可能不同；本仓库默认安装到 `~/.agents/skills/bookmark-organizer`。
 
 ## 给 Agent 的常用说法

@@ -8,6 +8,8 @@ import json
 import os
 import platform
 import shutil
+import tempfile
+import uuid
 from pathlib import Path
 
 
@@ -15,6 +17,7 @@ EXPECTED_NAME = "收藏夹整理助手（本地）"
 MINIMUM_VERSION = (1, 0, 2)
 REQUIRED_PERMISSIONS = {"bookmarks", "downloads", "activeTab", "storage"}
 BROWSER_NAMES = {"edge": "Microsoft-Edge", "chrome": "Google-Chrome", "brave": "Brave"}
+WINDOWS_JUNCTION_TAG = 0xA0000003
 
 
 def version_tuple(value: str) -> tuple[int, ...]:
@@ -57,14 +60,54 @@ def validate_manifest(extension_dir: Path) -> dict:
     return manifest
 
 
+def is_windows_junction(path: Path) -> bool:
+    """识别 Windows 目录联接，不把其他重解析点误认为 junction。"""
+    if os.name != "nt":
+        return False
+
+    native_check = getattr(os.path, "isjunction", None)
+    if native_check is not None:
+        try:
+            if native_check(path):
+                return True
+        except OSError:
+            pass
+
+    try:
+        return getattr(os.lstat(path), "st_reparse_tag", 0) == WINDOWS_JUNCTION_TAG
+    except OSError:
+        return False
+
+
+def is_directory_link(path: Path) -> bool:
+    return path.is_symlink() or is_windows_junction(path)
+
+
+def path_entry_exists(path: Path) -> bool:
+    """包含断开的符号链接和目录联接。"""
+    return path.exists() or is_directory_link(path)
+
+
+def remove_path_entry(path: Path) -> None:
+    """删除路径项；若为目录链接，只删除链接本身，不触及链接目标。"""
+    if path.is_symlink():
+        path.unlink()
+    elif is_windows_junction(path):
+        path.rmdir()
+    elif path.is_dir():
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
+
+
 def install_skill(source: Path, target: Path, update: bool) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
-    if target.is_symlink():
+    if is_directory_link(target):
         if target.resolve() == source.resolve():
-            return f"技能已通过软链接安装：{target}"
+            return f"技能已通过目录链接安装：{target}"
         if not update:
-            return f"技能位置已有其他软链接，未覆盖：{target}"
-        target.unlink()
+            return f"技能位置已有指向其他目录的链接，未覆盖：{target}"
+        remove_path_entry(target)
     elif target.exists():
         if not update:
             return f"技能位置已存在，未覆盖：{target}（需要更新时加 --update-skill）"
@@ -83,10 +126,44 @@ def install_skill(source: Path, target: Path, update: bool) -> str:
 
 def install_extension(source: Path, target: Path, update: bool) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists() and not update:
+    target_exists = path_entry_exists(target)
+    if target_exists and not target.is_dir():
+        raise RuntimeError(f"扩展目标不是目录：{target}")
+    if target_exists and not update:
         return f"扩展位置已存在，未覆盖：{target}（需要更新时加 --update-extension）"
-    shutil.copytree(source, target, dirs_exist_ok=True)
-    return f"已安装扩展源码：{target}"
+
+    staging = Path(tempfile.mkdtemp(prefix=f".{target.name}.staging-", dir=target.parent))
+    backup: Path | None = None
+    try:
+        shutil.copytree(source, staging, dirs_exist_ok=True)
+        validate_manifest(staging)
+
+        if target_exists:
+            backup = target.with_name(f".{target.name}.backup-{uuid.uuid4().hex}")
+            target.rename(backup)
+
+        try:
+            staging.rename(target)
+        except OSError as install_error:
+            if backup is not None and path_entry_exists(backup) and not path_entry_exists(target):
+                try:
+                    backup.rename(target)
+                except OSError as rollback_error:
+                    raise RuntimeError(
+                        f"扩展更新失败，且旧版本自动恢复失败；旧版本仍位于：{backup}"
+                    ) from rollback_error
+            raise RuntimeError("扩展更新失败，已恢复原有版本。") from install_error
+
+        if backup is not None:
+            try:
+                remove_path_entry(backup)
+            except OSError:
+                return f"已更新扩展源码：{target}；旧版本回滚副本未能自动清理：{backup}"
+            return f"已更新扩展源码：{target}；目标目录已与仓库版本完全同步"
+        return f"已安装扩展源码：{target}"
+    finally:
+        if path_entry_exists(staging):
+            remove_path_entry(staging)
 
 
 def parse_args() -> argparse.Namespace:
