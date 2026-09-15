@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>收藏夹助手</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div><p class="eyebrow">本地收藏夹</p><h1>收藏夹助手</h1></div>
+      <div class="header-actions">
+        <button id="open-manager" class="text-button">整理中心</button>
+        <button id="close-popup" class="close-button" aria-label="关闭">×</button>
+      </div>
+    </header>
+
+    <section id="current-card" class="card current-page" aria-labelledby="current-heading">
+      <p class="section-label" id="current-heading">当前网页</p>
+      <h2 id="page-title">正在读取…</h2>
+      <p id="page-url" class="muted single-line"></p>
+      <p id="page-state" class="state" role="status"></p>
+      <button id="add-temporary" class="primary" disabled>加入“临时收藏”</button>
+    </section>
+
+    <section class="summary-grid" aria-label="收藏夹摘要">
+      <div class="metric">
+        <span id="temporary-count">—</span>
+        <small>临时收藏</small>
+      </div>
+      <div class="metric">
+        <span id="duplicate-count">—</span>
+        <small>重复链接</small>
+      </div>
+    </section>
+
+    <section class="backup-card" aria-labelledby="backup-heading">
+      <div><p class="section-label" id="backup-heading">安全备份</p><p id="latest-backup" class="muted">正在查找…</p></div>
+      <button id="backup">立即备份</button>
+      <p id="backup-status" class="state" role="status"></p>
+    </section>
+  </main>
+  <script src="shared.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

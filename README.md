@@ -1,12 +1,12 @@
 # Browser Bookmark Organizer
 
-一个本地优先的浏览器收藏夹整理工具包：AI Agent 负责审计、理解内容和生成计划；Edge 扩展负责在浏览器内批量移动已确认的收藏。
+一个本地优先的浏览器收藏夹整理工具包：AI Agent 负责审计、理解内容和生成计划；Chromium 扩展负责快速收藏、防重复、备份恢复、方案预览和安全执行。
 
 不会上传收藏夹内容，也不在代码中存储任何模型 API 密钥。启用链接检查时，脚本会访问被检查的网址。
 
 ## 当前范围
 
-当前版本只实现本地使用方案：本机 Agent 加载技能并生成建议，本地扩展负责读取浏览器收藏夹、创建归档和执行已确认的移动计划。当前版本不连接远端收藏夹服务，也不建设插件内置的云端 Agent。
+当前 1.0.1 只实现本地使用方案：本机 Agent 加载技能并生成建议，本地扩展负责读取浏览器收藏夹、创建备份、展示方案和执行已确认的移动计划。当前版本不连接远端收藏夹服务，也不建设插件内置的云端 Agent。
 
 ## 能做什么
 
@@ -15,7 +15,10 @@
 - 生成 HTML 收藏夹画像：主题、内容类型、来源结构、质量指标，以及基于证据的 AI 深度解读。
 - 链接健康检查：区分不可用和“无法确认”，支持用历史审计结果检测标题、重定向和状态变化。
 - 独立备份：无需整理或移动，直接将当前完整收藏夹导出为可重新导入的 HTML，并保留最近 30 份。
-- Edge 安全批量移动：通过本地扩展的 `chrome.bookmarks` API 执行经过确认的移动计划；每次移动前自动导出完整 HTML 归档，归档完成后才会改动收藏夹。
+- 快速收藏与防重复：从工具栏把当前网页加入 `临时收藏`；全库已有相同网址时显示原位置，不再创建副本。
+- 备份与恢复中心：按日期展示最近备份，可定位文件、复制路径并查看安全恢复步骤。
+- 可视化整理与撤销：把 Agent JSON 转换成逐条移动预览；执行前自动备份，并可通过本地操作记录撤销插件完成的移动。
+- Chromium 安全批量移动：通过 `chrome.bookmarks` API 执行经过确认的移动计划；不自动删除、重命名或替换网址。
 
 ## 快速安装（Windows + Edge）
 
@@ -40,9 +43,26 @@ powershell -ExecutionPolicy Bypass -File .\installer\bootstrap.ps1 -Browser Edge
 
 1. 开启“开发人员模式”。
 2. 点击“加载解压缩的扩展”。
-3. 选择脚本输出的 `edge-bookmark-organizer` 目录。
+3. 选择脚本输出的 `bookmark-organizer` 扩展目录。
 
 这是浏览器的安全边界，安装脚本不会绕过。之后重启 Cursor、Codex 或其他支持 Agent Skills 的 Agent；它们会发现 `~\.agents\skills\bookmark-organizer`。
+
+## 跨平台安装
+
+扩展与 Python 审计脚本支持 Windows、macOS 和 Linux。安装器会为技能优先创建软链接，无法创建时才复制；扩展会放到当前操作系统的稳定用户目录。
+
+```bash
+python installer/install.py --browser edge
+# 也可使用 --browser chrome 或 --browser brave
+```
+
+更新已有副本时使用：
+
+```bash
+python installer/install.py --browser edge --update-extension --update-skill
+```
+
+脚本结束后仍需用户在浏览器扩展页开启开发者模式并“加载已解压的扩展程序”。这是所有操作系统都保留的人机安全确认。不同 Agent 对共享技能目录的发现方式可能不同；本仓库默认安装到 `~/.agents/skills/bookmark-organizer`。
 
 ## 给 Agent 的常用说法
 
@@ -68,9 +88,11 @@ python .\.agents\skills\bookmark-organizer\scripts\audit_bookmarks.py `
 
 加入 `--check-links` 才会检查链接。用 `--baseline <旧 audit.json>` 检查链接状态、标题和重定向变化。脚本还会生成 `ai-profile-brief.md`；Agent 据此写出可审查的 `ai-insights.json` 后，以 `--ai-insights` 再运行一次即可得到深度画像。
 
-只需备份时，点击扩展中的“仅备份当前收藏夹”；它不会扫描、移动或修改书签。扩展接收的移动计划示例见 [sample-move-plan.json](examples/sample-move-plan.json)。整理时先“校验方案”，再点击“先归档，再执行方案”；校验后若修改文本，必须重新校验。两种方式都会将完整收藏夹导出为带根目录和时间属性的可导入 HTML，写入浏览器下载目录下的 `Bookmark-Organizer-Archives`。归档下载成功才会开始移动；自动按下载时间保留严格命名的最近 30 份，清理不依赖可能变化的扩展 ID。
+日常使用时，点击扩展图标即可把当前网页加入 `临时收藏`；如果全库已有相同网址，扩展只显示原位置。工具栏同时提供“一键备份收藏夹”和“整理中心”入口。整理中心展示临时收藏、备份列表、可视化方案与操作记录；需要 Agent 自动分类时，可以复制整理任务，再把 Agent 的整段回复粘贴回来，插件会自动提取其中的方案。扩展接收的计划示例见 [sample-move-plan.json](examples/sample-move-plan.json)。
 
-如需回退，在浏览器的“导入收藏夹/书签”功能中选择该目录中的归档 HTML。归档位置跟随浏览器当前的下载目录；若希望放在其他磁盘，请先在浏览器设置中修改下载位置。
+备份会将完整收藏夹导出为带根目录和时间属性的可导入 HTML，写入浏览器下载目录下的 `Bookmark-Organizer-Archives`。移动和撤销都会先等待备份成功；自动按下载时间保留严格命名且仍存在的最近 30 份，已经在磁盘删除或移动的文件不会继续显示。整理后可从“操作记录”把书签移回原目录；操作记录也可单独清空，不影响收藏夹和备份文件。
+
+如需从 HTML 深度恢复，在整理中心选择备份并按“恢复方法”操作。浏览器没有向扩展开放原生 HTML 导入接口，导入通常会与现有收藏夹合并，因此扩展不会自动清空或覆盖当前收藏夹。归档位置跟随浏览器当前的下载目录；若希望放在其他磁盘，请先在浏览器设置中修改下载位置。
 
 ## 维护与排障
 
@@ -79,7 +101,7 @@ python .\.agents\skills\bookmark-organizer\scripts\audit_bookmarks.py `
 # 使用 Chrome 时：.\installer\doctor.ps1 -Browser Chrome
 ```
 
-自检会核验扩展名称、Manifest V3、最低版本 `0.4.0`，以及 `bookmarks`、`downloads` 两项必要权限。
+自检会核验扩展名称、Manifest V3、最低版本 `1.0.1`，以及 `bookmarks`、`downloads`、`activeTab`、`storage` 四项必要权限。
 
 开发改动可运行回归测试：
 
@@ -95,7 +117,7 @@ node .\tests\test_manager.js
 ## 目录说明
 
 - `.agents/skills/bookmark-organizer/`：跨 Agent 共用的技能、脚本与规范。
-- `extension/edge-bookmark-organizer/`：Edge 解压缩扩展源码。
+- `extension/edge-bookmark-organizer/`：Edge、Chrome、Brave 等 Chromium 浏览器的解压缩扩展源码。
 - `installer/`：安装、自检与维护脚本。
 - `docs/`：流程、隐私和浏览器扩展说明。
 

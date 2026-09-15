@@ -1,385 +1,596 @@
-const temporaryFolderName = '临时收藏';
-const archiveDirectory = 'Bookmark-Organizer-Archives';
-const archivePrefix = 'bookmark-archive-';
-const maxArchives = 30;
-let scan = null;
-let validatedPlan = null;
-let validatedPlanSignature = null;
+(function () {
+  'use strict';
 
-const status = document.querySelector('#status');
-const items = document.querySelector('#items');
-const result = document.querySelector('#result');
-const backupButton = document.querySelector('#backup');
-const scanButton = document.querySelector('#scan');
-const copyButton = document.querySelector('#copy');
-const previewButton = document.querySelector('#preview');
-const applyButton = document.querySelector('#apply');
-const planInput = document.querySelector('#plan');
+  const core = globalThis.BookmarkOrganizerCore;
+  const historyKey = 'bookmarkOrganizerOperations';
+  const maxHistory = 20;
+  let scan = null;
+  let validatedPlan = null;
+  let validatedPlanSignature = null;
 
-function canonical(url) {
-  try {
-    const parsed = new URL(url);
-    parsed.protocol = parsed.protocol.toLowerCase();
-    parsed.hostname = parsed.hostname.toLowerCase();
-    if ((parsed.protocol === 'https:' && parsed.port === '443') || (parsed.protocol === 'http:' && parsed.port === '80')) parsed.port = '';
-    if (parsed.pathname !== '/' && parsed.pathname.endsWith('/')) parsed.pathname = parsed.pathname.slice(0, -1);
-    parsed.hash = '';
-    return parsed.toString();
-  } catch { return url.trim(); }
-}
+  const bookmarkCount = document.querySelector('#bookmark-count');
+  const folderCount = document.querySelector('#folder-count');
+  const temporaryCount = document.querySelector('#temporary-count');
+  const archiveCount = document.querySelector('#archive-count');
+  const backupButton = document.querySelector('#backup');
+  const refreshArchivesButton = document.querySelector('#refresh-archives');
+  const backupStatus = document.querySelector('#backup-status');
+  const archiveList = document.querySelector('#archive-list');
+  const restoreGuide = document.querySelector('#restore-guide');
+  const restoreFile = document.querySelector('#restore-file');
+  const scanButton = document.querySelector('#scan');
+  const copyAgentButton = document.querySelector('#copy-agent');
+  const scanStatus = document.querySelector('#scan-status');
+  const temporaryList = document.querySelector('#temporary-list');
+  const manualTools = document.querySelector('#manual-tools');
+  const manualTarget = document.querySelector('#manual-target');
+  const folderOptions = document.querySelector('#folder-options');
+  const buildManualPlanButton = document.querySelector('#build-manual-plan');
+  const planSummary = document.querySelector('#plan-summary');
+  const planPreview = document.querySelector('#plan-preview');
+  const applyButton = document.querySelector('#apply');
+  const clearPlanButton = document.querySelector('#clear-plan');
+  const planInput = document.querySelector('#plan');
+  const validatePlanButton = document.querySelector('#validate-plan');
+  const result = document.querySelector('#result');
+  const refreshHistoryButton = document.querySelector('#refresh-history');
+  const clearHistoryButton = document.querySelector('#clear-history');
+  const historyList = document.querySelector('#history-list');
 
-function walk(node, ancestors, visit) {
-  const path = node.title ? [...ancestors, node.title] : ancestors;
-  visit(node, path);
-  for (const child of node.children || []) walk(child, path, visit);
-}
-
-async function scanBookmarks() {
-  const roots = await chrome.bookmarks.getTree();
-  const folders = [];
-  const urls = [];
-  let temporary = null;
-  for (const root of roots) {
-    walk(root, [], (node, path) => {
-      if (!node.url) folders.push({ id: node.id, path });
-      else urls.push({ id: node.id, title: node.title, url: node.url, canonical: canonical(node.url), path });
-      if (!node.url && node.title === temporaryFolderName) temporary = node;
-    });
+  function createElement(tag, className = '', text = '') {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text) node.textContent = text;
+    return node;
   }
-  if (!temporary) throw new Error(`未找到“${temporaryFolderName}”文件夹。`);
-  const temporaryUrls = [];
-  walk(temporary, [], (node) => {
-    if (node.url) temporaryUrls.push({ id: node.id, title: node.title, url: node.url, canonical: canonical(node.url) });
-  });
-  const duplicateMap = new Map();
-  for (const bookmark of urls) {
-    const arr = duplicateMap.get(bookmark.canonical) || [];
-    arr.push(bookmark);
-    duplicateMap.set(bookmark.canonical, arr);
+
+  function setMessage(node, text, kind = '') {
+    node.textContent = text;
+    node.className = `message${kind ? ` ${kind}` : ''}`;
   }
-  return { folders, urls, temporaryUrls, duplicateMap };
-}
 
-function renderScan(data) {
-  const rows = data.temporaryUrls.map(bookmark => {
-    const duplicates = data.duplicateMap.get(bookmark.canonical) || [];
-    const elsewhere = duplicates.filter(item => item.id !== bookmark.id);
-    return {
-      id: bookmark.id,
-      title: bookmark.title,
-      url: bookmark.url,
-      duplicateCount: elsewhere.length,
-      duplicatePaths: elsewhere.map(item => item.path.join('/'))
-    };
-  });
-  items.textContent = JSON.stringify(rows, null, 2);
-  status.textContent = `发现 ${rows.length} 条临时收藏；其中 ${rows.filter(row => row.duplicateCount).length} 条已有重复链接。`;
-  copyButton.disabled = false;
-}
-
-function normalizePath(path) {
-  return path.split('/').map(part => part.trim()).filter(Boolean);
-}
-
-function escapeHtml(value) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function netscapeTimestamp(value) {
-  const milliseconds = Number(value);
-  return Number.isFinite(milliseconds) && milliseconds > 0 ? Math.floor(milliseconds / 1000) : null;
-}
-
-function dateAttribute(name, value) {
-  const timestamp = netscapeTimestamp(value);
-  return timestamp === null ? '' : ` ${name}="${timestamp}"`;
-}
-
-function rootFolderAttribute(node, index) {
-  const id = String(node.id || '');
-  if (id === '1' || index === 0) return ' PERSONAL_TOOLBAR_FOLDER="true"';
-  if (id === '2' || index === 1) return ' UNFILED_BOOKMARKS_FOLDER="true"';
-  if (id === '3' || index === 2) return ' MOBILE_BOOKMARKS_FOLDER="true"';
-  return '';
-}
-
-function bookmarkNodeToHtml(node, depth = 1, folderAttribute = '') {
-  const indent = '  '.repeat(depth);
-  if (node.url) {
-    const addDate = dateAttribute('ADD_DATE', node.dateAdded);
-    return `${indent}<DT><A HREF="${escapeHtml(node.url)}"${addDate}>${escapeHtml(node.title)}</A>\n`;
+  function normalizePath(path) {
+    return String(path || '').split('/').map(part => part.trim()).filter(Boolean);
   }
-  const title = escapeHtml(node.title || '未命名文件夹');
-  const children = (node.children || []).map(child => bookmarkNodeToHtml(child, depth + 1)).join('');
-  const addDate = dateAttribute('ADD_DATE', node.dateAdded);
-  const lastModified = dateAttribute('LAST_MODIFIED', node.dateGroupModified);
-  return `${indent}<DT><H3${addDate}${lastModified}${folderAttribute}>${title}</H3>\n${indent}<DL><p>\n${children}${indent}</DL><p>\n`;
-}
 
-function bookmarksToNetscapeHtml(roots) {
-  const rootFolders = roots.flatMap(root => root.children || []);
-  const body = rootFolders.map((node, index) => bookmarkNodeToHtml(node, 1, rootFolderAttribute(node, index))).join('');
-  return [
-    '<!DOCTYPE NETSCAPE-Bookmark-file-1>',
-    '<!-- This is an automatically generated file. It will be read and overwritten. -->',
-    '<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">',
-    '<TITLE>Bookmarks</TITLE>',
-    '<H1>Bookmarks</H1>',
-    '<DL><p>',
-    body,
-    '</DL><p>'
-  ].join('\n');
-}
-
-function bookmarkTreeStats(roots) {
-  const stats = { bookmarks: 0, folders: 0 };
-  for (const root of roots) {
-    walk(root, [], node => {
-      if (node.url) stats.bookmarks += 1;
-      else if (String(node.id || '') !== '0') stats.folders += 1;
-    });
+  function planSignature(plan) {
+    return JSON.stringify(plan.map(item => ({ id: item.id, folderPath: item.folderPath })));
   }
-  return stats;
-}
 
-function archiveFileName() {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return `${archiveDirectory}/${archivePrefix}${timestamp}.html`;
-}
-
-async function waitForDownload(downloadId, timeoutMs = 30000) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let timer;
-    const finish = (callback, value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      chrome.downloads.onChanged.removeListener(listener);
-      callback(value);
-    };
-    const inspect = item => {
-      if (item?.state === 'complete') finish(resolve, item);
-      if (item?.state === 'interrupted') finish(reject, new Error(`归档下载中断：${item.error || '未知原因'}`));
-    };
-    const listener = delta => {
-      if (delta.id !== downloadId || !delta.state) return;
-      if (delta.state.current === 'complete') {
-        chrome.downloads.search({ id: downloadId }).then(items => inspect(items[0])).catch(error => finish(reject, error));
+  function temporaryBookmarks(folder, folderPath) {
+    const found = [];
+    if (!folder) return found;
+    core.walk(folder, folderPath.slice(0, -1), (node, path) => {
+      if (node.url) {
+        found.push({
+          id: node.id,
+          parentId: node.parentId,
+          index: node.index,
+          title: node.title,
+          url: node.url,
+          canonical: core.canonicalUrl(node.url),
+          path
+        });
       }
-      if (delta.state.current === 'interrupted') finish(reject, new Error(`归档下载中断：${delta.error?.current || '未知原因'}`));
+    });
+    return found;
+  }
+
+  async function scanBookmarks() {
+    const roots = await chrome.bookmarks.getTree();
+    const collected = core.collectBookmarks(roots);
+    const temporary = core.findTemporaryFolder(roots);
+    if (!temporary) throw new Error(`未找到“${core.temporaryFolderName}”文件夹。请先通过工具栏加入一个临时收藏。`);
+    const temporaryFolder = collected.folders.find(folder => folder.id === temporary.id);
+    const temporaryUrls = temporaryBookmarks(temporary, temporaryFolder?.path || [core.temporaryFolderName]);
+    const duplicateMap = new Map();
+    for (const bookmark of collected.bookmarks) {
+      const group = duplicateMap.get(bookmark.canonical) || [];
+      group.push(bookmark);
+      duplicateMap.set(bookmark.canonical, group);
+    }
+    return {
+      roots,
+      folders: collected.folders,
+      urls: collected.bookmarks,
+      temporary,
+      temporaryUrls,
+      duplicateMap,
+      bookmarkBar: core.findBookmarkBar(roots)
     };
-    chrome.downloads.onChanged.addListener(listener);
-    timer = setTimeout(() => finish(reject, new Error('归档下载等待超时，未执行移动。')), timeoutMs);
-    chrome.downloads.search({ id: downloadId }).then(items => inspect(items[0])).catch(error => finish(reject, error));
-  });
-}
-
-async function archiveCurrentBookmarks() {
-  const roots = await chrome.bookmarks.getTree();
-  const content = bookmarksToNetscapeHtml(roots);
-  const stats = bookmarkTreeStats(roots);
-  const createdAt = new Date().toISOString();
-  const blobUrl = URL.createObjectURL(new Blob([content], { type: 'text/html;charset=utf-8' }));
-  try {
-    const downloadId = await chrome.downloads.download({
-      url: blobUrl,
-      filename: archiveFileName(),
-      saveAs: false,
-      conflictAction: 'uniquify'
-    });
-    const item = await waitForDownload(downloadId);
-    return { downloadId, filename: item.filename, createdAt, ...stats };
-  } finally {
-    URL.revokeObjectURL(blobUrl);
   }
-}
 
-function isManagedArchive(item) {
-  const escapedDirectory = archiveDirectory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const escapedPrefix = archivePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const filenamePattern = new RegExp(`[\\\\/]${escapedDirectory}[\\\\/]${escapedPrefix}.+\\.html$`, 'i');
-  return item.state === 'complete' && filenamePattern.test(item.filename || '');
-}
+  function duplicateRows(data) {
+    return data.temporaryUrls.map(bookmark => {
+      const elsewhere = (data.duplicateMap.get(bookmark.canonical) || []).filter(item => item.id !== bookmark.id);
+      return { ...bookmark, duplicateCount: elsewhere.length, duplicatePaths: elsewhere.map(item => item.path.slice(0, -1).join('/')) };
+    });
+  }
 
-async function trimArchives() {
-  const downloads = await chrome.downloads.search({
-    query: [archiveDirectory, archivePrefix],
-    orderBy: ['-startTime'],
-    limit: 0
-  });
-  const oldArchives = downloads.filter(isManagedArchive).slice(maxArchives);
-  const removed = [];
-  const warnings = [];
-  for (const item of oldArchives) {
+  function renderScan(data) {
+    const rows = duplicateRows(data);
+    temporaryList.replaceChildren();
+    folderOptions.replaceChildren();
+    const rootTitle = data.bookmarkBar?.title || 'bookmarks_bar';
+    manualTarget.placeholder = `${rootTitle}/开发/Git`;
+    planInput.placeholder = `[{"id":"123","folderPath":"${rootTitle}/开发/Git"}]`;
+
+    for (const folder of data.folders.filter(item => item.path[0] === data.bookmarkBar?.title && item.id !== data.temporary.id)) {
+      const option = document.createElement('option');
+      option.value = folder.path.join('/');
+      folderOptions.append(option);
+    }
+
+    if (!rows.length) {
+      temporaryList.append(createElement('p', 'empty', '“临时收藏”现在是空的。'));
+    }
+    for (const row of rows) {
+      const item = createElement('article', 'bookmark-item');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.dataset.bookmarkId = row.id;
+      checkbox.setAttribute('aria-label', `选择 ${row.title}`);
+      const content = createElement('div');
+      content.append(createElement('p', 'item-title', row.title || row.url));
+      content.append(createElement('p', 'item-meta', row.url));
+      if (row.duplicatePaths.length) content.append(createElement('p', 'item-meta', `已有位置：${row.duplicatePaths.join('；')}`));
+      item.append(checkbox, content);
+      if (row.duplicateCount) item.append(createElement('span', 'duplicate-badge', `重复 ${row.duplicateCount} 处`));
+      temporaryList.append(item);
+    }
+
+    const duplicateTotal = rows.filter(row => row.duplicateCount > 0).length;
+    setMessage(scanStatus, `发现 ${rows.length} 条临时收藏，其中 ${duplicateTotal} 条在其他位置已有相同网址。`, 'success');
+    copyAgentButton.disabled = false;
+    manualTools.hidden = rows.length === 0;
+    temporaryCount.textContent = String(rows.length);
+  }
+
+  async function refreshOverview() {
+    const roots = await chrome.bookmarks.getTree();
+    const collected = core.collectBookmarks(roots);
+    const temporary = core.findTemporaryFolder(roots);
+    const temporaryFolder = collected.folders.find(folder => folder.id === temporary?.id);
+    bookmarkCount.textContent = String(collected.bookmarks.length);
+    folderCount.textContent = String(collected.folders.length);
+    temporaryCount.textContent = String(temporaryBookmarks(temporary, temporaryFolder?.path || [core.temporaryFolderName]).length);
+  }
+
+  async function refreshArchives() {
+    archiveList.replaceChildren(createElement('p', 'empty', '正在读取备份记录…'));
     try {
-      await chrome.downloads.removeFile(item.id);
-      await chrome.downloads.erase({ id: item.id });
-      removed.push(item.filename);
+      const archives = await core.listManagedArchives();
+      archiveList.replaceChildren();
+      archiveCount.textContent = String(archives.filter(item => item.exists !== false).length);
+      if (!archives.length) {
+        archiveList.append(createElement('p', 'empty', '尚无本扩展创建的备份。'));
+        return;
+      }
+      for (const archive of archives) {
+        const row = createElement('article', 'archive-item');
+        const content = createElement('div');
+        const title = core.formatDate(archive.startTime);
+        const state = archive.exists === false ? '文件已被移动或删除' : '文件存在';
+        content.append(createElement('p', 'item-title', title));
+        content.append(createElement('p', 'item-meta', `${core.formatBytes(archive.fileSize ?? archive.totalBytes)} · ${state}`));
+        content.append(createElement('p', 'item-meta', archive.filename || '路径未知'));
+        const actions = createElement('div', 'archive-actions');
+        const show = createElement('button', '', '显示文件');
+        show.disabled = archive.exists === false;
+        show.addEventListener('click', () => chrome.downloads.show(archive.id));
+        const copy = createElement('button', '', '复制路径');
+        copy.addEventListener('click', async () => {
+          await navigator.clipboard.writeText(archive.filename || '');
+          setMessage(backupStatus, '备份文件路径已复制。', 'success');
+        });
+        const restore = createElement('button', '', '恢复方法');
+        restore.addEventListener('click', () => {
+          restoreFile.textContent = archive.filename || '路径未知';
+          restoreGuide.hidden = false;
+          globalThis.scrollTo?.({ top: Math.max(0, restoreGuide.offsetTop - 24), behavior: 'smooth' });
+        });
+        const remove = createElement('button', 'danger-button', '删除备份');
+        remove.addEventListener('click', async () => {
+          const filename = archive.filename || '这份备份';
+          if (!confirm(`确定删除这份备份吗？\n${filename}\n\n此操作不会修改收藏夹，但删除后的备份文件无法通过插件恢复。`)) return;
+          remove.disabled = true;
+          try {
+            await chrome.downloads.removeFile(archive.id);
+            await chrome.downloads.erase({ id: archive.id });
+            setMessage(backupStatus, '指定备份已删除；收藏夹没有改变。', 'success');
+            restoreGuide.hidden = true;
+            await refreshArchives();
+          } catch (error) {
+            setMessage(backupStatus, `删除备份失败：${error.message}`, 'error');
+            remove.disabled = false;
+          }
+        });
+        actions.append(show, copy, restore, remove);
+        row.append(content, actions);
+        archiveList.append(row);
+      }
     } catch (error) {
-      warnings.push(`${item.filename}：${error.message}`);
+      archiveCount.textContent = '—';
+      archiveList.replaceChildren(createElement('p', 'empty', `读取备份失败：${error.message}`));
     }
   }
-  return { removed, warnings };
-}
 
-function archiveCleanupMessage(cleanup) {
-  const removed = cleanup.removed.length
-    ? `\n已清理 ${cleanup.removed.length} 份最早归档。`
-    : '';
-  const warnings = cleanup.warnings.length
-    ? `\n归档保留清理提示：${cleanup.warnings.join('；')}`
-    : '';
-  return `${removed}${warnings}`;
-}
-
-async function ensureFolder(path) {
-  let parentId = '1';
-  for (const title of path.slice(1)) {
-    const children = await chrome.bookmarks.getChildren(parentId);
-    let folder = children.find(child => !child.url && child.title === title);
-    if (!folder) folder = await chrome.bookmarks.create({ parentId, title });
-    parentId = folder.id;
+  function parsePlan(raw) {
+    const trimmed = String(raw || '').trim();
+    const candidates = [trimmed];
+    for (const match of trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) candidates.push(match[1].trim());
+    const firstBracket = trimmed.indexOf('[');
+    const lastBracket = trimmed.lastIndexOf(']');
+    if (firstBracket >= 0 && lastBracket > firstBracket) candidates.push(trimmed.slice(firstBracket, lastBracket + 1));
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (Array.isArray(parsed)) return parsed;
+      } catch { /* Try the next representation. */ }
+    }
+    try {
+      return trimmed.split(/\r?\n/).filter(Boolean).map(line => {
+        const separator = line.indexOf('|');
+        if (separator < 1) throw new Error('没有从 Agent 回复中找到可用的整理方案。');
+        return { id: line.slice(0, separator).trim(), folderPath: line.slice(separator + 1).trim() };
+      });
+    } catch {
+      throw new Error('没有从 Agent 回复中找到可用方案。请让 Agent 返回包含 id 和 folderPath 的 JSON 数组。');
+    }
   }
-  return parentId;
-}
 
-function validatePlan() {
-  if (!scan) throw new Error('请先扫描临时收藏。');
-  const raw = planInput.value.trim();
-  let plan;
-  try {
-    plan = JSON.parse(raw);
-  } catch {
-    plan = raw.split(/\r?\n/).filter(Boolean).map(line => {
-      const separator = line.indexOf('|');
-      if (separator < 1) throw new Error('每行请使用“书签编号|目标目录”格式。');
-      return { id: line.slice(0, separator).trim(), folderPath: line.slice(separator + 1).trim() };
+  function validatePlan(rawPlan = planInput.value.trim()) {
+    if (!scan) throw new Error('请先扫描临时收藏。');
+    const plan = typeof rawPlan === 'string' ? parsePlan(rawPlan) : rawPlan;
+    if (!Array.isArray(plan) || !plan.length) throw new Error('整理方案不能为空。');
+    const temporaryById = new Map(scan.temporaryUrls.map(item => [item.id, item]));
+    const seen = new Set();
+    return plan.map(item => {
+      if (!item || typeof item.id !== 'string' || typeof item.folderPath !== 'string') throw new Error('每项都需要字符串 id 和 folderPath。');
+      const bookmark = temporaryById.get(item.id);
+      if (!bookmark) throw new Error(`书签 ${item.id} 不在当前“临时收藏”中。`);
+      if (seen.has(item.id)) throw new Error(`书签 ${item.id} 重复出现在方案中。`);
+      seen.add(item.id);
+      const path = normalizePath(item.folderPath);
+      const actualRoot = scan.bookmarkBar?.title;
+      if (!actualRoot) throw new Error('没有找到浏览器的收藏夹栏根目录。');
+      const acceptedRoots = new Set([actualRoot, 'bookmarks_bar', '收藏夹栏', '书签栏', 'Bookmarks bar', 'Favorites bar'].filter(Boolean));
+      if (path.length < 2 || !acceptedRoots.has(path[0])) throw new Error(`目标路径必须以“${actualRoot || '收藏夹栏'}/…”开头：${item.folderPath}`);
+      path[0] = actualRoot;
+      if (path.includes(core.temporaryFolderName)) throw new Error(`目标目录不能仍然位于“${core.temporaryFolderName}”：${item.folderPath}`);
+      return {
+        id: item.id,
+        folderPath: path,
+        title: bookmark.title,
+        url: bookmark.url,
+        fromPath: bookmark.path.slice(0, -1)
+      };
     });
   }
-  if (!Array.isArray(plan) || !plan.length) throw new Error('方案必须是非空 JSON 数组。');
-  const temporaryIds = new Set(scan.temporaryUrls.map(item => item.id));
-  const seen = new Set();
-  const checked = plan.map(item => {
-    if (!item || typeof item.id !== 'string' || typeof item.folderPath !== 'string') throw new Error('每项都需要字符串 id 和 folderPath。');
-    if (!temporaryIds.has(item.id)) throw new Error(`书签 ${item.id} 不在临时收藏中。`);
-    if (seen.has(item.id)) throw new Error(`书签 ${item.id} 重复出现在方案中。`);
-    seen.add(item.id);
-    const path = normalizePath(item.folderPath);
-    if (!path.length || path[0] !== '收藏夹栏') throw new Error(`目标路径必须以“收藏夹栏”开头：${item.folderPath}`);
-    return { id: item.id, folderPath: path };
-  });
-  return checked;
-}
 
-function planSignature(plan) {
-  return JSON.stringify(plan);
-}
-
-planInput.addEventListener('input', () => {
-  if (!validatedPlan) return;
-  validatedPlan = null;
-  validatedPlanSignature = null;
-  applyButton.disabled = true;
-  result.className = 'error';
-  result.textContent = '方案内容已改变，请重新校验。';
-});
-
-backupButton.addEventListener('click', async () => {
-  try {
-    backupButton.disabled = true;
-    applyButton.disabled = true;
-    result.className = '';
-    result.textContent = '正在备份当前全部收藏夹…';
-    const archive = await archiveCurrentBookmarks();
-    const cleanup = await trimArchives();
-    result.textContent = [
-      `备份已完成：${archive.filename}`,
-      `生成时间：${archive.createdAt}`,
-      `书签 ${archive.bookmarks} 条，文件夹 ${archive.folders} 个。`,
-      '本次没有修改任何收藏夹。'
-    ].join('\n') + archiveCleanupMessage(cleanup);
-  } catch (error) {
-    result.className = 'error';
-    result.textContent = `备份失败：${error.message}\n本次没有修改任何收藏夹。`;
-  } finally {
-    backupButton.disabled = false;
-    applyButton.disabled = !validatedPlan;
+  function missingFolderPaths(plan) {
+    const existing = new Set(scan.folders.map(folder => folder.path.join('/')));
+    const missing = new Set();
+    for (const item of plan) {
+      for (let length = 2; length <= item.folderPath.length; length += 1) {
+        const path = item.folderPath.slice(0, length).join('/');
+        if (!existing.has(path)) missing.add(path);
+      }
+    }
+    return [...missing];
   }
-});
 
-scanButton.addEventListener('click', async () => {
-  try {
-    scanButton.disabled = true;
-    status.textContent = '正在扫描…';
-    scan = await scanBookmarks();
-    renderScan(scan);
-    validatedPlan = null;
-    validatedPlanSignature = null;
-    result.textContent = '';
-    applyButton.disabled = true;
-  } catch (error) {
-    status.textContent = error.message;
-  } finally { scanButton.disabled = false; }
-});
-
-copyButton.addEventListener('click', async () => {
-  await navigator.clipboard.writeText(items.textContent);
-  status.textContent = '扫描结果已复制。';
-});
-
-previewButton.addEventListener('click', () => {
-  try {
-    validatedPlan = validatePlan();
-    validatedPlanSignature = planSignature(validatedPlan);
-    result.className = '';
-    result.textContent = `已校验：将移动 ${validatedPlan.length} 条收藏；必要时会创建不存在的目标文件夹。`;
+  function renderPlan(plan) {
+    validatedPlan = plan;
+    validatedPlanSignature = planSignature(plan);
+    planPreview.replaceChildren();
+    const missing = missingFolderPaths(plan);
+    planSummary.className = 'plan-summary';
+    planSummary.textContent = `将移动 ${plan.length} 条收藏${missing.length ? `，并创建 ${missing.length} 个目标文件夹` : '，不需要创建新文件夹'}。`;
+    for (const item of plan) {
+      const row = createElement('article', 'plan-item');
+      const from = createElement('div', 'path-box');
+      from.append(createElement('small', '', item.title || item.url));
+      from.append(document.createTextNode(item.fromPath.join(' / ')));
+      const to = createElement('div', 'path-box');
+      to.append(createElement('small', '', '移动到'));
+      to.append(document.createTextNode(item.folderPath.join(' / ')));
+      row.append(from, createElement('div', 'arrow', '→'), to);
+      planPreview.append(row);
+    }
     applyButton.disabled = false;
-  } catch (error) {
-    validatedPlan = null;
-    validatedPlanSignature = null;
-    applyButton.disabled = true;
-    result.className = 'error';
-    result.textContent = `未通过：${error.message}`;
+    clearPlanButton.disabled = false;
+    setMessage(result, '方案已通过本地校验。请检查上方逐条预览。', 'success');
   }
-});
 
-applyButton.addEventListener('click', async () => {
-  if (!validatedPlan) return;
-  try {
+  function clearPlan(message = '') {
+    validatedPlan = null;
+    validatedPlanSignature = null;
+    planPreview.replaceChildren();
+    planSummary.className = 'plan-summary empty';
+    planSummary.textContent = '尚未生成或导入整理方案。';
     applyButton.disabled = true;
-    backupButton.disabled = true;
-    const currentPlan = validatePlan();
-    if (planSignature(currentPlan) !== validatedPlanSignature) {
-      throw new Error('方案内容已改变，请重新校验后再执行。');
-    }
-    result.className = '';
-    result.textContent = '正在归档当前全部收藏夹…';
-    const archive = await archiveCurrentBookmarks();
-    const cleanup = await trimArchives();
-    const moved = [];
-    for (const item of validatedPlan) {
-      const destination = await ensureFolder(item.folderPath);
-      await chrome.bookmarks.move(item.id, { parentId: destination });
-      moved.push({ id: item.id, folderPath: item.folderPath.join('/') });
-    }
-    result.className = '';
-    result.textContent = `归档已完成：${archive.filename}\n已移动 ${moved.length} 条：\n${JSON.stringify(moved, null, 2)}${archiveCleanupMessage(cleanup)}`;
-    scan = await scanBookmarks();
-    renderScan(scan);
-    validatedPlan = null;
-    validatedPlanSignature = null;
-  } catch (error) {
-    validatedPlan = null;
-    validatedPlanSignature = null;
-    result.className = 'error';
-    result.textContent = `执行中断：${error.message}`;
-  } finally {
-    backupButton.disabled = false;
-    applyButton.disabled = !validatedPlan;
+    clearPlanButton.disabled = true;
+    if (message) setMessage(result, message);
   }
-});
+
+  async function ensureFolder(path) {
+    const roots = await chrome.bookmarks.getTree();
+    const bar = core.findBookmarkBar(roots);
+    if (!bar) throw new Error('没有找到收藏夹栏。');
+    let parentId = bar.id;
+    const created = [];
+    for (const title of path.slice(1)) {
+      const children = await chrome.bookmarks.getChildren(parentId);
+      let folder = children.find(child => !child.url && child.title === title);
+      if (!folder) {
+        folder = await chrome.bookmarks.create({ parentId, title });
+        created.push(folder.id);
+      }
+      parentId = folder.id;
+    }
+    return { id: parentId, created };
+  }
+
+  async function loadOperations() {
+    const stored = await chrome.storage.local.get({ [historyKey]: [] });
+    return Array.isArray(stored[historyKey]) ? stored[historyKey] : [];
+  }
+
+  async function saveOperations(operations) {
+    await chrome.storage.local.set({ [historyKey]: operations.slice(0, maxHistory) });
+  }
+
+  async function addOperation(operation) {
+    const operations = await loadOperations();
+    operations.unshift(operation);
+    await saveOperations(operations);
+  }
+
+  function operationId() {
+    return globalThis.crypto?.randomUUID?.() || `operation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  async function renderHistory() {
+    historyList.replaceChildren(createElement('p', 'empty', '正在读取操作记录…'));
+    const operations = await loadOperations();
+    historyList.replaceChildren();
+    if (!operations.length) {
+      historyList.append(createElement('p', 'empty', '尚无插件执行的整理记录。'));
+      return;
+    }
+    const latestActiveId = operations.find(operation => !operation.undoneAt)?.id;
+    for (const operation of operations) {
+      const row = createElement('article', `history-item${operation.undoneAt ? ' undone' : ''}`);
+      const content = createElement('div');
+      content.append(createElement('p', 'item-title', `${core.formatDate(operation.createdAt)} · 移动 ${operation.moves.length} 条`));
+      const state = operation.undoneAt ? `已于 ${core.formatDate(operation.undoneAt)} 撤销` : operation.status === 'partial' ? '执行中断，可撤销已完成部分' : '已完成';
+      content.append(createElement('p', 'item-meta', state));
+      content.append(createElement('p', 'item-meta', `整理前备份：${operation.archivePath}`));
+      row.append(content);
+      if (!operation.undoneAt && operation.moves.length && operation.id === latestActiveId) {
+        const undo = createElement('button', '', '撤销本次整理');
+        undo.addEventListener('click', () => undoOperation(operation.id, undo));
+        row.append(undo);
+      } else if (!operation.undoneAt && operation.moves.length) {
+        row.append(createElement('span', 'item-meta', '请先撤销较新的整理'));
+      }
+      historyList.append(row);
+    }
+  }
+
+  async function undoOperation(id, button) {
+    if (!confirm('确定撤销这次整理吗？扩展会先备份当前收藏夹，再把书签移回原目录。')) return;
+    button.disabled = true;
+    setMessage(result, '正在备份当前状态并撤销…');
+    try {
+      const operations = await loadOperations();
+      const operation = operations.find(item => item.id === id);
+      if (!operation || operation.undoneAt) throw new Error('这条操作记录不存在或已经撤销。');
+      const undoArchive = await core.archiveCurrentBookmarks();
+      await core.trimArchives();
+      const byParent = new Map();
+      for (const move of operation.moves) {
+        const group = byParent.get(move.fromParentId) || [];
+        group.push(move);
+        byParent.set(move.fromParentId, group);
+      }
+      let restored = 0;
+      for (const group of byParent.values()) {
+        group.sort((left, right) => left.fromIndex - right.fromIndex);
+        for (const move of group) {
+          await chrome.bookmarks.get(move.id);
+          const destination = { parentId: move.fromParentId };
+          if (Number.isInteger(move.fromIndex)) destination.index = move.fromIndex;
+          await chrome.bookmarks.move(move.id, destination);
+          restored += 1;
+        }
+      }
+      operation.undoneAt = new Date().toISOString();
+      operation.undoArchivePath = undoArchive.filename;
+      await saveOperations(operations);
+      setMessage(result, `撤销完成：${restored} 条书签已移回原目录。撤销前备份：${undoArchive.filename}`, 'success');
+      await Promise.all([renderHistory(), refreshOverview()]);
+    } catch (error) {
+      setMessage(result, `撤销中断：${error.message}。当前状态已经在撤销前备份中保留。`, 'error');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function runBackup() {
+    try {
+      backupButton.disabled = true;
+      setMessage(backupStatus, '正在备份当前全部收藏夹…');
+      const archive = await core.archiveCurrentBookmarks();
+      const cleanup = await core.trimArchives();
+      setMessage(backupStatus, `备份完成：${archive.bookmarks} 条书签、${archive.folders} 个文件夹。\n${archive.filename}\n本次没有修改收藏夹。${core.archiveCleanupMessage(cleanup)}`, 'success');
+      await refreshArchives();
+    } catch (error) {
+      setMessage(backupStatus, `备份失败：${error.message}\n本次没有修改收藏夹。`, 'error');
+    } finally {
+      backupButton.disabled = false;
+    }
+  }
+
+  backupButton.addEventListener('click', runBackup);
+
+  refreshArchivesButton.addEventListener('click', refreshArchives);
+
+  scanButton.addEventListener('click', async () => {
+    try {
+      scanButton.disabled = true;
+      setMessage(scanStatus, '正在扫描…');
+      scan = await scanBookmarks();
+      renderScan(scan);
+      clearPlan();
+      setMessage(result, '');
+    } catch (error) {
+      setMessage(scanStatus, error.message, 'error');
+    } finally {
+      scanButton.disabled = false;
+    }
+  });
+
+  copyAgentButton.addEventListener('click', async () => {
+    if (!scan) return;
+    const payload = {
+      task: `请使用 bookmark-organizer 技能理解下列网页内容，并为每条临时收藏选择合适目录。优先复用现有目录；如需新建目录应保持稳定清晰。不要删除书签。只返回 JSON 数组，每项为 {"id":"…","folderPath":"${scan.bookmarkBar?.title || 'bookmarks_bar'}/…"}。`,
+      existingFolders: scan.folders.filter(folder => folder.path[0] === scan.bookmarkBar?.title).map(folder => folder.path.join('/')),
+      temporaryBookmarks: duplicateRows(scan).map(item => ({
+        id: item.id,
+        title: item.title,
+        url: item.url,
+        currentPath: item.path.join('/'),
+        duplicatePaths: item.duplicatePaths
+      }))
+    };
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    setMessage(scanStatus, '整理任务已复制。粘贴给 Agent；完成后把它的整段回复粘贴到“使用 Agent 自动分类”。', 'success');
+  });
+
+  buildManualPlanButton.addEventListener('click', () => {
+    try {
+      const selectedIds = [...temporaryList.querySelectorAll('input[type="checkbox"]:checked')].map(input => input.dataset.bookmarkId);
+      if (!selectedIds.length) throw new Error('请先选择至少一条临时收藏。');
+      const target = manualTarget.value.trim();
+      if (!target) throw new Error('请输入或选择目标目录。');
+      const rawPlan = selectedIds.map(id => ({ id, folderPath: target }));
+      planInput.value = JSON.stringify(rawPlan, null, 2);
+      renderPlan(validatePlan(rawPlan));
+      const panel = document.querySelector('#plan-panel');
+      globalThis.scrollTo?.({ top: Math.max(0, panel.offsetTop - 16), behavior: 'smooth' });
+    } catch (error) {
+      setMessage(scanStatus, error.message, 'error');
+    }
+  });
+
+  validatePlanButton.addEventListener('click', () => {
+    try {
+      renderPlan(validatePlan());
+    } catch (error) {
+      clearPlan();
+      setMessage(result, `方案未通过：${error.message}`, 'error');
+    }
+  });
+
+  planInput.addEventListener('input', () => {
+    if (!validatedPlan) return;
+    clearPlan('方案内容已改变，请重新校验。');
+  });
+
+  clearPlanButton.addEventListener('click', () => {
+    planInput.value = '';
+    clearPlan('整理方案已清除。');
+  });
+
+  applyButton.addEventListener('click', async () => {
+    if (!validatedPlan) return;
+    const planToApply = validatedPlan;
+    const moved = [];
+    let archive = null;
+    let operationSaved = false;
+    try {
+      applyButton.disabled = true;
+      backupButton.disabled = true;
+      setMessage(result, '正在重新扫描并校验方案…');
+      scan = await scanBookmarks();
+      const currentPlan = validatePlan(planToApply.map(item => ({ id: item.id, folderPath: item.folderPath.join('/') })));
+      if (planSignature(currentPlan) !== validatedPlanSignature) throw new Error('收藏夹状态或方案已经改变，请重新预览。');
+      setMessage(result, '正在备份当前全部收藏夹…');
+      archive = await core.archiveCurrentBookmarks();
+      const cleanup = await core.trimArchives();
+      setMessage(result, '备份成功，正在执行移动…');
+      for (const item of currentPlan) {
+        const current = (await chrome.bookmarks.get(item.id))[0];
+        if (!current) throw new Error(`无法读取书签 ${item.id}。`);
+        const originalParentId = current.parentId;
+        const originalIndex = current.index;
+        const destination = await ensureFolder(item.folderPath);
+        await chrome.bookmarks.move(item.id, { parentId: destination.id });
+        moved.push({
+          id: item.id,
+          title: item.title,
+          url: item.url,
+          fromParentId: originalParentId,
+          fromIndex: originalIndex,
+          fromPath: item.fromPath,
+          toPath: item.folderPath
+        });
+      }
+      await addOperation({
+        id: operationId(),
+        createdAt: new Date().toISOString(),
+        status: 'complete',
+        archivePath: archive.filename,
+        moves: moved
+      });
+      operationSaved = true;
+      setMessage(result, `整理完成：已移动 ${moved.length} 条收藏。\n整理前备份：${archive.filename}${core.archiveCleanupMessage(cleanup)}\n如不满意，可在“操作记录”中撤销。`, 'success');
+      clearPlan();
+      scan = await scanBookmarks();
+      renderScan(scan);
+      await Promise.all([refreshOverview(), refreshArchives(), renderHistory()]);
+    } catch (error) {
+      if (moved.length && archive && !operationSaved) {
+        await addOperation({
+          id: operationId(),
+          createdAt: new Date().toISOString(),
+          status: 'partial',
+          archivePath: archive.filename,
+          moves: moved
+        });
+        await renderHistory();
+      }
+      clearPlan();
+      setMessage(result, `执行中断：${error.message}${moved.length ? `\n已有 ${moved.length} 条完成移动，可在“操作记录”中撤销。` : ''}`, 'error');
+    } finally {
+      backupButton.disabled = false;
+      applyButton.disabled = !validatedPlan;
+    }
+  });
+
+  refreshHistoryButton.addEventListener('click', renderHistory);
+
+  clearHistoryButton.addEventListener('click', async () => {
+    const operations = await loadOperations();
+    if (!operations.length) {
+      setMessage(result, '当前没有可清除的操作记录。');
+      return;
+    }
+    if (!confirm('确定清空全部操作记录吗？这不会删除收藏夹或备份文件，但清空后将无法再通过这些记录撤销整理。')) return;
+    await saveOperations([]);
+    await renderHistory();
+    setMessage(result, '操作记录已清空；收藏夹和备份文件没有改变。', 'success');
+  });
+
+  async function initializeManager() {
+    await Promise.allSettled([refreshOverview(), refreshArchives(), renderHistory()]);
+    if (globalThis.location?.search === '?action=backup') {
+      globalThis.history?.replaceState?.({}, '', 'manager.html');
+      await runBackup();
+    }
+  }
+
+  initializeManager();
+})();
