@@ -9,6 +9,7 @@ let validatedPlanSignature = null;
 const status = document.querySelector('#status');
 const items = document.querySelector('#items');
 const result = document.querySelector('#result');
+const backupButton = document.querySelector('#backup');
 const scanButton = document.querySelector('#scan');
 const copyButton = document.querySelector('#copy');
 const previewButton = document.querySelector('#preview');
@@ -134,6 +135,17 @@ function bookmarksToNetscapeHtml(roots) {
   ].join('\n');
 }
 
+function bookmarkTreeStats(roots) {
+  const stats = { bookmarks: 0, folders: 0 };
+  for (const root of roots) {
+    walk(root, [], node => {
+      if (node.url) stats.bookmarks += 1;
+      else if (String(node.id || '') !== '0') stats.folders += 1;
+    });
+  }
+  return stats;
+}
+
 function archiveFileName() {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   return `${archiveDirectory}/${archivePrefix}${timestamp}.html`;
@@ -170,6 +182,8 @@ async function waitForDownload(downloadId, timeoutMs = 30000) {
 async function archiveCurrentBookmarks() {
   const roots = await chrome.bookmarks.getTree();
   const content = bookmarksToNetscapeHtml(roots);
+  const stats = bookmarkTreeStats(roots);
+  const createdAt = new Date().toISOString();
   const blobUrl = URL.createObjectURL(new Blob([content], { type: 'text/html;charset=utf-8' }));
   try {
     const downloadId = await chrome.downloads.download({
@@ -179,7 +193,7 @@ async function archiveCurrentBookmarks() {
       conflictAction: 'uniquify'
     });
     const item = await waitForDownload(downloadId);
-    return { downloadId, filename: item.filename };
+    return { downloadId, filename: item.filename, createdAt, ...stats };
   } finally {
     URL.revokeObjectURL(blobUrl);
   }
@@ -211,6 +225,16 @@ async function trimArchives() {
     }
   }
   return { removed, warnings };
+}
+
+function archiveCleanupMessage(cleanup) {
+  const removed = cleanup.removed.length
+    ? `\n已清理 ${cleanup.removed.length} 份最早归档。`
+    : '';
+  const warnings = cleanup.warnings.length
+    ? `\n归档保留清理提示：${cleanup.warnings.join('；')}`
+    : '';
+  return `${removed}${warnings}`;
 }
 
 async function ensureFolder(path) {
@@ -265,6 +289,29 @@ planInput.addEventListener('input', () => {
   result.textContent = '方案内容已改变，请重新校验。';
 });
 
+backupButton.addEventListener('click', async () => {
+  try {
+    backupButton.disabled = true;
+    applyButton.disabled = true;
+    result.className = '';
+    result.textContent = '正在备份当前全部收藏夹…';
+    const archive = await archiveCurrentBookmarks();
+    const cleanup = await trimArchives();
+    result.textContent = [
+      `备份已完成：${archive.filename}`,
+      `生成时间：${archive.createdAt}`,
+      `书签 ${archive.bookmarks} 条，文件夹 ${archive.folders} 个。`,
+      '本次没有修改任何收藏夹。'
+    ].join('\n') + archiveCleanupMessage(cleanup);
+  } catch (error) {
+    result.className = 'error';
+    result.textContent = `备份失败：${error.message}\n本次没有修改任何收藏夹。`;
+  } finally {
+    backupButton.disabled = false;
+    applyButton.disabled = !validatedPlan;
+  }
+});
+
 scanButton.addEventListener('click', async () => {
   try {
     scanButton.disabled = true;
@@ -305,6 +352,7 @@ applyButton.addEventListener('click', async () => {
   if (!validatedPlan) return;
   try {
     applyButton.disabled = true;
+    backupButton.disabled = true;
     const currentPlan = validatePlan();
     if (planSignature(currentPlan) !== validatedPlanSignature) {
       throw new Error('方案内容已改变，请重新校验后再执行。');
@@ -320,13 +368,7 @@ applyButton.addEventListener('click', async () => {
       moved.push({ id: item.id, folderPath: item.folderPath.join('/') });
     }
     result.className = '';
-    const cleanupMessage = cleanup.removed.length
-      ? `\n已清理 ${cleanup.removed.length} 份最早归档。`
-      : '';
-    const warningMessage = cleanup.warnings.length
-      ? `\n归档保留清理提示：${cleanup.warnings.join('；')}`
-      : '';
-    result.textContent = `归档已完成：${archive.filename}\n已移动 ${moved.length} 条：\n${JSON.stringify(moved, null, 2)}${cleanupMessage}${warningMessage}`;
+    result.textContent = `归档已完成：${archive.filename}\n已移动 ${moved.length} 条：\n${JSON.stringify(moved, null, 2)}${archiveCleanupMessage(cleanup)}`;
     scan = await scanBookmarks();
     renderScan(scan);
     validatedPlan = null;
@@ -336,5 +378,8 @@ applyButton.addEventListener('click', async () => {
     validatedPlanSignature = null;
     result.className = 'error';
     result.textContent = `执行中断：${error.message}`;
-  } finally { applyButton.disabled = !validatedPlan; }
+  } finally {
+    backupButton.disabled = false;
+    applyButton.disabled = !validatedPlan;
+  }
 });

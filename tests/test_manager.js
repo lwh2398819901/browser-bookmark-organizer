@@ -30,10 +30,32 @@ const context = {
   document: { querySelector: selector => element(selector) },
   chrome: {
     runtime: { id: 'new-extension-id' },
-    bookmarks: { getTree: async () => tree },
-    downloads: { onChanged: { addListener() {}, removeListener() {} } }
+    bookmarks: {
+      getTree: async () => tree,
+      move: async () => { context.bookmarkMoves += 1; }
+    },
+    downloads: {
+      download: async options => {
+        const id = context.downloads.length + 1;
+        context.downloads.push({
+          id,
+          state: 'complete',
+          filename: `D:\\Downloads\\${options.filename.replace(/\//g, '\\')}`,
+          startTime: new Date().toISOString()
+        });
+        return id;
+      },
+      search: async query => query.id
+        ? context.downloads.filter(item => item.id === query.id)
+        : [...context.downloads].reverse(),
+      removeFile: async () => {},
+      erase: async () => {},
+      onChanged: { addListener() {}, removeListener() {} }
+    }
   }
 };
+context.bookmarkMoves = 0;
+context.downloads = [];
 
 vm.createContext(context);
 const manager = path.join(__dirname, '..', 'extension', 'edge-bookmark-organizer', 'manager.js');
@@ -54,6 +76,13 @@ if (!context.isManagedArchive({
 }
 
 (async () => {
+  await element('#backup').listeners.click();
+  if (context.downloads.length !== 1) throw new Error('Standalone backup did not create an archive.');
+  if (context.bookmarkMoves !== 0) throw new Error('Standalone backup modified bookmarks.');
+  if (!element('#result').textContent.includes('本次没有修改任何收藏夹')) {
+    throw new Error('Standalone backup did not report its non-mutating result.');
+  }
+
   await element('#scan').listeners.click();
   element('#plan').value = JSON.stringify([{ id: '10', folderPath: `${bar}/Test` }]);
   element('#preview').listeners.click();

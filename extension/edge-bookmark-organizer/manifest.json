@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "收藏夹整理助手（本地）",
-  "version": "0.3.0",
-  "description": "仅使用 Edge 的本地 API 扫描、归档和批量整理临时收藏。",
+  "version": "0.4.0",
+  "description": "仅使用浏览器本地 API 备份、扫描和批量整理收藏夹。",
   "permissions": ["bookmarks", "downloads"],
   "action": {
     "default_title": "收藏夹整理助手",
