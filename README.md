@@ -25,7 +25,7 @@
 前提：已安装 Git、Python 3.10+ 与 Microsoft Edge。
 
 ```powershell
-git clone <你的仓库地址> browser-bookmark-organizer
+git clone https://github.com/lwh2398819901/browser-bookmark-organizer.git
 cd browser-bookmark-organizer
 powershell -ExecutionPolicy Bypass -File .\installer\bootstrap.ps1 -Browser Edge -OpenExtensionsPage
 ```
