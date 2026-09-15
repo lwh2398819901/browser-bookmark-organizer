@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>收藏夹整理助手</title>
+  <link rel="stylesheet" href="manager.css">
+</head>
+<body>
+  <main>
+    <h1>收藏夹整理助手</h1>
+    <p class="hint">仅访问收藏夹。先扫描，再粘贴归档方案，最后执行。</p>
+    <div class="actions">
+      <button id="scan">扫描“临时收藏”</button>
+      <button id="copy" disabled>复制扫描结果</button>
+    </div>
+    <p id="status" role="status"></p>
+    <pre id="items">尚未扫描。</pre>
+
+    <label for="plan">归档方案（JSON 数组；每项包含 <code>id</code> 和 <code>folderPath</code>）</label>
+    <textarea id="plan" spellcheck="false" placeholder='[{"id":"123","folderPath":"收藏夹栏/Linux/课程与学习"}]'></textarea>
+    <div class="actions">
+      <button id="preview">校验方案</button>
+      <button id="apply" disabled>执行已校验方案</button>
+    </div>
+    <pre id="result"></pre>
+  </main>
+  <script src="manager.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+:root { color-scheme: light dark; font: 14px/1.45 system-ui, sans-serif; }
+body { width: 620px; margin: 0; }
+main { padding: 16px; }
+h1 { font-size: 18px; margin: 0 0 4px; }
+.hint, #status { color: #666; margin: 4px 0 12px; }
+.actions { display: flex; gap: 8px; margin: 8px 0; }
+button { padding: 6px 10px; }
+pre, textarea { box-sizing: border-box; width: 100%; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; border: 1px solid #bbb; border-radius: 4px; padding: 8px; }
+pre { background: color-mix(in srgb, Canvas 94%, CanvasText); margin: 0 0 14px; }
+textarea { min-height: 110px; font-family: ui-monospace, monospace; }
+label { display: block; margin: 8px 0 4px; font-weight: 600; }
+#result { min-height: 22px; }
+.error { color: #b00020; }

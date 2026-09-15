@@ -1,0 +1,20 @@
+# Real bookmark exports and browser state
+Bookmarks
+Bookmarks.bak
+favorites_*.html
+*.bookmark-export.html
+
+# Generated reports and user-specific analysis
+reports/
+output/
+audit.json
+bookmark-profile.html
+ai-profile-brief.md
+ai-insights.json
+
+# Python and editor state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.vscode/
+.idea/

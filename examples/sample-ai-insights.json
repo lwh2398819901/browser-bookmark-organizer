@@ -1,0 +1,21 @@
+{
+  "headline": "以工程实践为核心的知识资料库",
+  "summary": "仅根据审计报告中的目录、来源和代表书签作出的证据性总结。",
+  "focus_areas": [
+    {
+      "name": "系统与工程基础",
+      "interpretation": "长期参考与实战资料并存。",
+      "evidence": "来自主题分布和目录样本。"
+    }
+  ],
+  "information_habits": [
+    "结论应由审计数据支持。"
+  ],
+  "next_actions": [
+    {
+      "priority": "P1",
+      "action": "先复核未稳定归类的条目。",
+      "evidence": "来自本地分类结果。"
+    }
+  ]
+}
