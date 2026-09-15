@@ -1,4 +1,4 @@
 interface:
   display_name: "收藏夹整理"
   short_description: "备份、审计、画像、去重并整理浏览器收藏夹"
-  default_prompt: "使用 $bookmark-organizer 备份或审计我的浏览器收藏夹，并按我的意图准备可复核的整理计划。"
+  default_prompt: "使用 $bookmark-organizer 根据我的意图选择扩展实时扫描或全量审计，并准备可复核的收藏夹整理计划。"
