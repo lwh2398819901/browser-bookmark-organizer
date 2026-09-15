@@ -1,25 +1,27 @@
-# Browser Bookmark Organizer
+# 浏览器收藏夹整理工具包
 
-This repository contains a local-first bookmark workflow. For any request about browser bookmarks, read `.agents/skills/bookmark-organizer/SKILL.md` before acting.
+本仓库提供本地优先的收藏夹整理流程。收到任何浏览器收藏夹相关请求时，先阅读 `.agents/skills/bookmark-organizer/SKILL.md`，再决定行动。
 
-## Operating boundary
+## 工作边界
 
-- Run the deterministic audit before opening pages or proposing changes.
-- Never edit a live Chromium `Bookmarks` file while its browser is running.
-- Preserve the user's export and browser data. Generated reports belong in a user-chosen output folder and must not be committed.
-- A request to “organize bookmarks” means audit and propose by default. Moving or deleting requires an explicit approved plan.
-- Treat timeouts, 401, 403, 429, and login pages as unverified—not dead links.
-- The Edge extension under `extension/edge-bookmark-organizer` may apply a reviewed move plan through `chrome.bookmarks`; it does not delete bookmarks.
+- 打开网页或提出改动建议前，先运行确定性审计。
+- 浏览器运行时，绝不直接编辑 Chromium 正在使用的 `Bookmarks` 文件。
+- 保留用户的导出文件和浏览器数据。报告写入用户指定的输出目录，不得提交到 Git。
+- “整理收藏夹”通常表示审计与建议；若用户已明确指定条目范围和目标目录，可在预检后移动。删除仍需要明确对象或已展示清单上的确认。
+- 超时、401、403、429 和登录页均为“无法确认”，不是失效链接。
+- `extension/edge-bookmark-organizer` 下的 Edge 扩展可通过 `chrome.bookmarks` 应用已复核的移动计划；扩展本身不删除书签。
 
-## Intent routing
+## 意图理解
 
-| User wording | Workflow |
+不要把表达方式当作固定命令。结合当前对话、用户指向的条目和目标目录理解意图：
+
+| 用户可能的说法 | 通常应进入的工作方式 |
 |---|---|
-| 整理收藏夹 / 首次整理 / 全量审计 | First-time audit and reviewable proposal |
-| 整理临时收藏夹 / 归档临时收藏 | Inbox triage, exact deduplication, move plan |
-| 检查重复收藏 / 收藏夹去重 | Exact duplicate report; related fragments stay distinct |
-| 检查失效链接 / 检查链接变化 | Opt-in availability and baseline comparison |
-| 收藏夹画像 / 深度画像 | HTML profile; AI interpretation must be evidence-backed |
-| 执行移动计划 / 应用归档计划 | Validate and apply an already approved plan |
+| 整理收藏夹、第一次收拾、这些太乱了 | 全量审计与可复核建议 |
+| 整理临时收藏夹、把刚存的归类、处理收件箱 | 收件箱归档、精确去重与移动预检 |
+| 检查重复、这些是不是存过、相似链接合并 | 精确重复报告；保留不同章节链接 |
+| 哪些过期、网站还活着吗、有没有改版 | 链接健康检查与基线比较 |
+| 收藏夹画像、我都关注什么、深度分析 | HTML 画像；AI 结论必须有证据 |
+| 就按方案放、把这些移到某目录、现在动手 | 重新校验后应用明确范围内的移动 |
 
-Do not infer sensitive personal traits from bookmark content. Keep command-generated facts distinct from AI interpretation.
+不得从收藏内容推断敏感个人特质。始终区分命令生成的事实与 AI 的语义解读。

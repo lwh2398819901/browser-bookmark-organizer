@@ -1,4 +1,7 @@
 const temporaryFolderName = '临时收藏';
+const archiveDirectory = 'Bookmark-Organizer-Archives';
+const archivePrefix = 'bookmark-archive-';
+const maxArchives = 30;
 let scan = null;
 let validatedPlan = null;
 
@@ -79,6 +82,117 @@ function normalizePath(path) {
   return path.split('/').map(part => part.trim()).filter(Boolean);
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function bookmarkNodeToHtml(node, depth = 1) {
+  const indent = '  '.repeat(depth);
+  if (node.url) {
+    return `${indent}<DT><A HREF="${escapeHtml(node.url)}">${escapeHtml(node.title)}</A>\n`;
+  }
+  const title = escapeHtml(node.title || '未命名文件夹');
+  const children = (node.children || []).map(child => bookmarkNodeToHtml(child, depth + 1)).join('');
+  return `${indent}<DT><H3>${title}</H3>\n${indent}<DL><p>\n${children}${indent}</DL><p>\n`;
+}
+
+function bookmarksToNetscapeHtml(roots) {
+  const body = roots.flatMap(root => root.children || []).map(node => bookmarkNodeToHtml(node)).join('');
+  return [
+    '<!DOCTYPE NETSCAPE-Bookmark-file-1>',
+    '<!-- This is an automatically generated file. It will be read and overwritten. -->',
+    '<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">',
+    '<TITLE>Bookmarks</TITLE>',
+    '<H1>Bookmarks</H1>',
+    '<DL><p>',
+    body,
+    '</DL><p>'
+  ].join('\n');
+}
+
+function archiveFileName() {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `${archiveDirectory}/${archivePrefix}${timestamp}.html`;
+}
+
+async function waitForDownload(downloadId, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      chrome.downloads.onChanged.removeListener(listener);
+      callback(value);
+    };
+    const inspect = item => {
+      if (item?.state === 'complete') finish(resolve, item);
+      if (item?.state === 'interrupted') finish(reject, new Error(`归档下载中断：${item.error || '未知原因'}`));
+    };
+    const listener = delta => {
+      if (delta.id !== downloadId || !delta.state) return;
+      if (delta.state.current === 'complete') {
+        chrome.downloads.search({ id: downloadId }).then(items => inspect(items[0])).catch(error => finish(reject, error));
+      }
+      if (delta.state.current === 'interrupted') finish(reject, new Error(`归档下载中断：${delta.error?.current || '未知原因'}`));
+    };
+    chrome.downloads.onChanged.addListener(listener);
+    timer = setTimeout(() => finish(reject, new Error('归档下载等待超时，未执行移动。')), timeoutMs);
+    chrome.downloads.search({ id: downloadId }).then(items => inspect(items[0])).catch(error => finish(reject, error));
+  });
+}
+
+async function archiveCurrentBookmarks() {
+  const roots = await chrome.bookmarks.getTree();
+  const content = bookmarksToNetscapeHtml(roots);
+  const blobUrl = URL.createObjectURL(new Blob([content], { type: 'text/html;charset=utf-8' }));
+  try {
+    const downloadId = await chrome.downloads.download({
+      url: blobUrl,
+      filename: archiveFileName(),
+      saveAs: false,
+      conflictAction: 'uniquify'
+    });
+    const item = await waitForDownload(downloadId);
+    return { downloadId, filename: item.filename };
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
+}
+
+function isOwnArchive(item) {
+  const escapedDirectory = archiveDirectory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedPrefix = archivePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const filenamePattern = new RegExp(`[\\\\/]${escapedDirectory}[\\\\/]${escapedPrefix}.+\\.html$`, 'i');
+  return item.byExtensionId === chrome.runtime.id && item.state === 'complete' && filenamePattern.test(item.filename || '');
+}
+
+async function trimArchives() {
+  const downloads = await chrome.downloads.search({
+    query: [archiveDirectory, archivePrefix],
+    orderBy: ['-startTime'],
+    limit: 0
+  });
+  const oldArchives = downloads.filter(isOwnArchive).slice(maxArchives);
+  const removed = [];
+  const warnings = [];
+  for (const item of oldArchives) {
+    try {
+      await chrome.downloads.removeFile(item.id);
+      await chrome.downloads.erase({ id: item.id });
+      removed.push(item.filename);
+    } catch (error) {
+      warnings.push(`${item.filename}：${error.message}`);
+    }
+  }
+  return { removed, warnings };
+}
+
 async function ensureFolder(path) {
   let parentId = '1';
   for (const title of path.slice(1)) {
@@ -154,6 +268,10 @@ applyButton.addEventListener('click', async () => {
   if (!validatedPlan) return;
   try {
     applyButton.disabled = true;
+    result.className = '';
+    result.textContent = '正在归档当前全部收藏夹…';
+    const archive = await archiveCurrentBookmarks();
+    const cleanup = await trimArchives();
     const moved = [];
     for (const item of validatedPlan) {
       const destination = await ensureFolder(item.folderPath);
@@ -161,7 +279,13 @@ applyButton.addEventListener('click', async () => {
       moved.push({ id: item.id, folderPath: item.folderPath.join('/') });
     }
     result.className = '';
-    result.textContent = `已移动 ${moved.length} 条：\n${JSON.stringify(moved, null, 2)}`;
+    const cleanupMessage = cleanup.removed.length
+      ? `\n已清理 ${cleanup.removed.length} 份最早归档。`
+      : '';
+    const warningMessage = cleanup.warnings.length
+      ? `\n归档保留清理提示：${cleanup.warnings.join('；')}`
+      : '';
+    result.textContent = `归档已完成：${archive.filename}\n已移动 ${moved.length} 条：\n${JSON.stringify(moved, null, 2)}${cleanupMessage}${warningMessage}`;
     scan = await scanBookmarks();
     renderScan(scan);
     validatedPlan = null;

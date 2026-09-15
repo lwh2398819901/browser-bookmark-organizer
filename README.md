@@ -10,7 +10,7 @@
 - 日常整理 `临时收藏`：与全库精确去重，理解内容后归档到已有或新建目录。
 - 生成 HTML 收藏夹画像：主题、内容类型、来源结构、质量指标，以及基于证据的 AI 深度解读。
 - 链接健康检查：区分不可用和“无法确认”，支持用历史审计结果检测标题、重定向和状态变化。
-- Edge 批量移动：通过本地扩展的 `chrome.bookmarks` API 执行经过确认的移动计划。
+- Edge 安全批量移动：通过本地扩展的 `chrome.bookmarks` API 执行经过确认的移动计划；每次移动前自动导出完整 HTML 归档，归档完成后才会改动收藏夹。
 
 ## 快速安装（Windows + Edge）
 
@@ -62,7 +62,9 @@ python .\.agents\skills\bookmark-organizer\scripts\audit_bookmarks.py `
 
 加入 `--check-links` 才会检查链接。用 `--baseline <旧 audit.json>` 检查链接状态、标题和重定向变化。脚本还会生成 `ai-profile-brief.md`；Agent 据此写出可审查的 `ai-insights.json` 后，以 `--ai-insights` 再运行一次即可得到深度画像。
 
-扩展接收的移动计划示例见 [sample-move-plan.json](examples/sample-move-plan.json)。在扩展中先“校验方案”，再点击“执行移动”。
+扩展接收的移动计划示例见 [sample-move-plan.json](examples/sample-move-plan.json)。在扩展中先“校验方案”，再点击“先归档，再执行方案”。扩展会将完整收藏夹导出为可导入的 HTML，写入浏览器下载目录下的 `Bookmark-Organizer-Archives`。归档下载成功才会开始移动；自动按下载时间保留最近 30 份，并只删除该扩展自己生成的最早归档。
+
+如需回退，在浏览器的“导入收藏夹/书签”功能中选择该目录中的归档 HTML。归档位置跟随浏览器当前的下载目录；若希望放在其他磁盘，请先在浏览器设置中修改下载位置。
 
 ## 维护与排障
 

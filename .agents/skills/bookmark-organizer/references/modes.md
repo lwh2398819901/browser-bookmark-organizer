@@ -1,30 +1,34 @@
-# First-time cleanup
+# 运行模式详解
 
-1. Obtain a browser HTML export or a copy of Chromium's `Bookmarks` file. Preserve the input unchanged.
-2. Run the audit without `--check-links`. Review exact duplicates, folder distribution, domain distribution, and malformed URLs.
-3. If link checking is requested, run it in a separate pass. A non-2xx status alone is not enough to delete a bookmark: login-gated sites, rate limits, and bot protection are common.
-4. Read pages only for bookmarks whose folder cannot be determined from their existing context, title, hostname, and deterministic report. Keep meaningful existing folder groupings unless their content demonstrates they are misplaced.
-5. Present a per-bookmark proposal for deletion, renaming, and relocation. Apply only the approved plan. For imports, create a new HTML output; for a live browser, use its bookmarks API.
+模式用于理解任务，不是只能由固定命令触发的开关。优先依据用户语境、处理范围、期待结果和风险等级判断；以下只是常见情形。
 
-# Recurring temporary folder
+## 首次全量整理
 
-`临时收藏` is an inbox, not a permanent category.
+1. 获取浏览器 HTML 导出，或复制 Chromium 的 `Bookmarks` 文件；始终保留输入文件不变。
+2. 不加 `--check-links` 先审计，查看精确重复、目录分布、域名分布和异常 URL。
+3. 用户需要检查链接时，再单独运行链接检查。非 2xx 不能单独证明书签应该删除：登录限制、限流和反爬都很常见。
+4. 仅对现有目录、标题、域名和审计报告无法判断归属的条目阅读网页。已有的合理组合应被视为线索，而不是随意打散。
+5. 用户只要求“先看看”时停在建议阶段；用户明确指定范围、目标目录和改动意图时，可在预检后移动。导入整理生成新 HTML；实时浏览器整理使用收藏夹 API。通过本地扩展移动时，扩展必须先生成完整 HTML 归档，归档成功后才可继续。
 
-1. Re-scan it immediately before handling it.
-2. Compare exact URLs against the entire collection. If an exact duplicate exists elsewhere, report its existing path and remove the inbox copy only when that behavior was already authorized. URL fragments often denote a specific chapter or heading, so treat differing fragments as related references, not duplicates.
-3. Read the remaining pages as needed, select an existing folder where it fits, and create a narrowly named folder only when no stable category exists.
-4. Submit a single validated batch plan. Confirm that all moved IDs left `临时收藏` and that the destination paths exist.
+## 临时收藏归档
 
-# Profile and change detection
+`临时收藏`通常是收件箱，而不是固定分类；用户也可能叫它“收集箱”“待整理”或“先放这里”。应结合目录和上下文识别，不要只依赖一个固定名称。
 
-The generated HTML profile should describe the collection, not infer private traits beyond bookmark evidence. It may show:
+1. 处理前重新扫描目标收件箱。
+2. 与全库比较精确 URL。若其他位置已有相同 URL，报告现有路径；用户已授权去重时可移除收件箱副本。不同 URL 片段通常表示章节或标题，属于关联参考而非重复。
+3. 对剩余条目按需读取内容，优先复用稳定目录；仅在没有长期合适分类时创建窄而清晰的新目录。
+4. 范围、目标目录和移动意图已清晰时，预检后可执行；若用户只是说“帮我看看”“整理一下”，先给计划。完成后确认条目已离开收件箱，且目标路径存在。
 
-- bookmark count, folder count, top folders, and top domains;
-- topic distribution inferred from folder paths;
-- exact and normalized duplicate groups;
-- availability-check results, including unverified outcomes;
-- redirect targets and page-title changes compared with a prior audit.
+## 收藏夹画像与变化检测
 
-For a deep semantic profile, use `ai-profile-brief.md` produced by the audit. It contains a bounded, inspectable evidence set. Have the available AI model produce an `ai-insights.json` with a headline, evidence-backed focus areas, observable information habits, and prioritized maintenance actions; rerun the audit with `--ai-insights`. Keep the report explicit about the difference between command-generated facts and AI interpretation.
+HTML 画像应描述收藏夹本身，不应从书签证据外推私人或敏感特质。它可以展示：
 
-Use a prior `audit.json` as `--baseline` to flag a changed redirect target, page title, or availability result. A changed title or redirect is a review signal, not proof that the content is obsolete.
+- 收藏、目录、高频目录和高频域名；
+- 从已有目录和内容线索得到的结构分布；
+- 精确重复与关联 URL 组；
+- 链接检查结果，包括“无法确认”；
+- 与先前审计相比的重定向、标题和可用性变化。
+
+需要深度语义画像时，使用审计生成的 `ai-profile-brief.md`。AI 应从当前用户的目录、标题、来源和样本动态归纳主题，而不是套用预设分类；输出 `ai-insights.json` 后使用 `--ai-insights` 重新生成报告。必须清楚区分命令生成的事实和 AI 解读。
+
+将此前的 `audit.json` 作为 `--baseline`，可标记重定向、标题或链接状态发生的变化。标题或重定向变化只是复核信号，不等于内容过期。

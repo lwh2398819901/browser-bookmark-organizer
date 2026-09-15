@@ -9,7 +9,7 @@
 <body>
   <main>
     <h1>收藏夹整理助手</h1>
-    <p class="hint">仅访问收藏夹。先扫描，再粘贴归档方案，最后执行。</p>
+    <p class="hint">仅访问收藏夹和下载目录。先扫描，再粘贴归档方案，最后执行。每次执行前都会归档全部收藏夹，归档成功后才会移动；自动保留最近 30 份。</p>
     <div class="actions">
       <button id="scan">扫描“临时收藏”</button>
       <button id="copy" disabled>复制扫描结果</button>
@@ -21,7 +21,7 @@
     <textarea id="plan" spellcheck="false" placeholder='[{"id":"123","folderPath":"收藏夹栏/Linux/课程与学习"}]'></textarea>
     <div class="actions">
       <button id="preview">校验方案</button>
-      <button id="apply" disabled>执行已校验方案</button>
+      <button id="apply" disabled>先归档，再执行方案</button>
     </div>
     <pre id="result"></pre>
   </main>

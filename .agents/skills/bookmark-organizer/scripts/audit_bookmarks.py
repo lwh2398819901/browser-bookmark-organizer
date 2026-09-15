@@ -26,22 +26,12 @@ from urllib.request import Request, urlopen
 TRACKING_KEYS = {"fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid", "_hsenc", "_hsmi"}
 UNVERIFIED_CODES = {401, 403, 407, 408, 409, 425, 429, 451}
 
-THEME_RULES = {
-    "AI 与智能体": (" ai", "人工智能", "大模型", "模型", "llm", "gpt", "agent", "mcp", "machine learning", "deepseek", "cursor"),
-    "系统、网络与安全": ("linux", "网络", "dns", "tcp", "nginx", "docker", "kubernetes", "安全", "security", "wireshark", "kernel"),
-    "软件工程与后端": ("java", "python", "golang", "数据库", "sql", "spring", "mysql", "kafka", "redis", "git", "算法", "c++"),
-    "前端与体验": ("javascript", "typescript", "css", "html", "react", "vue", "前端", "设计", "ui", "webpack"),
-    "工作与业务": ("山东米高梅", "火山引擎", "巨量引擎", "oceanengine", "工作", "飞书", "业务", "营销"),
-    "工具与效率": ("工具", "转换", "在线", "格式", "搜索", "笔记", "图床", "pdf", "效率"),
-    "阅读与通识": ("阅读", "历史", "书", "weekly", "周刊", "news", "知识", "学习"),
-}
-
 CONTENT_TYPE_RULES = {
-    "官方文档／参考": ("docs.", "documentation", "官方", "reference", "manual", "wiki", "开发者文档"),
+    "文档／参考": ("docs.", "documentation", "官方", "reference", "manual", "wiki", "帮助中心"),
     "课程／教程": ("教程", "课程", "guide", "learn", "学习", "入门", "training"),
-    "技术文章／资讯": ("blog", "csdn", "cnblogs", "juejin", "zhihu", "weekly", "news", "文章"),
-    "代码仓库": ("github.com", "gitlab.com", "gitee.com", "repository", "repo"),
-    "工具／服务": ("tool", "工具", "converter", "generator", "在线", "console", "dashboard"),
+    "文章／资讯": ("blog", "news", "article", "weekly", "文章", "资讯", "专栏"),
+    "代码／项目": ("github.com", "gitlab.com", "gitee.com", "repository", "repo"),
+    "工具／服务": ("tool", "工具", "converter", "generator", "在线", "console", "dashboard", "calculator"),
     "视频／社区": ("bilibili", "youtube", "forum", "社区", "问答", "v2ex"),
 }
 
@@ -218,30 +208,31 @@ def classify_item(item: dict[str, Any], rules: dict[str, tuple[str, ...]], fallb
     return label if score else fallback
 
 
-def semantic_overview(items: list[dict[str, Any]], domains: Counter[str]) -> dict[str, Any]:
-    themed: dict[str, list[dict[str, Any]]] = defaultdict(list)
+def collection_overview(items: list[dict[str, Any]], domains: Counter[str]) -> dict[str, Any]:
+    folders: dict[str, list[dict[str, Any]]] = defaultdict(list)
     content_types: Counter[str] = Counter()
     for item in items:
-        themed[classify_item(item, THEME_RULES, "待进一步归类")].append(item)
+        folder = item["path"][1] if len(item["path"]) > 1 else item["path"][0] if item["path"] else "未分类"
+        folders[folder].append(item)
         content_types[classify_item(item, CONTENT_TYPE_RULES, "其他页面")]+= 1
-    theme_counts = Counter({label: len(group) for label, group in themed.items()})
+    folder_counts = Counter({label: len(group) for label, group in folders.items()})
     top_five_share = round(sum(count for _domain, count in domains.most_common(5)) / max(1, len(items)) * 100, 1)
     samples = {
         label: [
             {"title": item["title"], "url": item["url"], "path": item["path"]}
             for item in group[:5]
         ]
-        for label, group in sorted(themed.items(), key=lambda pair: len(pair[1]), reverse=True)
+        for label, group in sorted(folders.items(), key=lambda pair: len(pair[1]), reverse=True)
     }
     return {
-        "theme_distribution": dict(theme_counts.most_common()),
+        "folder_distribution": dict(folder_counts.most_common()),
         "content_type_distribution": dict(content_types.most_common()),
         "structure": {
             "deep_folder_bookmarks": sum(1 for item in items if len(item["path"]) >= 3),
             "top_five_domain_share_percent": top_five_share,
-            "unclassified_bookmarks": theme_counts.get("待进一步归类", 0),
+            "other_content_type_bookmarks": content_types.get("其他页面", 0),
         },
-        "theme_samples": samples,
+        "folder_samples": samples,
     }
 
 
@@ -286,15 +277,26 @@ def insight_section(insights: dict[str, Any]) -> str:
         for item in actions if isinstance(item, dict)
     )
     habits = escaped_lines(insights.get("information_habits", []))
+    taxonomy = insights.get("taxonomy", [])
+    taxonomy_html = "".join(
+        "<article><h3>{}</h3><p>{}</p><small>{}</small></article>".format(
+            html.escape(str(item.get("name", "主题"))),
+            html.escape(str(item.get("definition", ""))),
+            html.escape(str(item.get("evidence", ""))),
+        )
+        for item in taxonomy if isinstance(item, dict)
+    )
+    taxonomy_section = f"<h3>本次收藏夹的动态主题体系</h3><div class='focus-grid'>{taxonomy_html}</div>" if taxonomy_html else ""
     return f"""<section class='ai-panel'><p class='eyebrow'>AI 语义层 · 结论均应回溯至书签证据</p><h2>{headline}</h2><p class='lead'>{narrative}</p>
+    {taxonomy_section}
     <div class='focus-grid'>{focus_html}</div>
     <div class='ai-columns'><div><h3>可见的信息习惯</h3><ul>{habits}</ul></div><div><h3>建议的下一步</h3><ol class='actions'>{actions_html}</ol></div></div></section>"""
 
 
 def profile_html(audit: dict[str, Any]) -> str:
     stats = audit["stats"]
-    overview = audit["semantic_overview"]
-    topics = Counter(overview["theme_distribution"])
+    overview = audit["collection_overview"]
+    topics = Counter(overview["folder_distribution"])
     content_types = Counter(overview["content_type_distribution"])
     domains = Counter(audit["profile"]["top_domains"])
     link = Counter(result.get("status") for result in audit.get("link_results", {}).values())
@@ -303,8 +305,8 @@ def profile_html(audit: dict[str, Any]) -> str:
     ])
     structure = overview["structure"]
     observations = [
-        f"最集中的知识主题是「{'、'.join(label for label, _count in topics.most_common(3))}」。",
-        f"{structure['deep_folder_bookmarks']} 条收藏位于三级及更深目录，反映出可复用的组织结构。",
+        f"当前目录中收藏最多的分类是「{'、'.join(label for label, _count in topics.most_common(3))}」。",
+        f"{structure['deep_folder_bookmarks']} 条收藏位于三级及更深目录，反映出已有的组织层次。",
         f"前五个来源占全部收藏的 {structure['top_five_domain_share_percent']}%，可用于判断来源是否过度集中。",
     ]
     quality = [("精确重复链接", stats["duplicate_group_count"]), ("同页不同章节／参数", stats["related_url_group_count"]), ("链接可用", link.get("available", 0)), ("链接不可用", link.get("unavailable", 0)), ("需要人工复核", link.get("unverified", 0)), ("相较基线有变化", len(audit["changes"]))]
@@ -314,24 +316,24 @@ def profile_html(audit: dict[str, Any]) -> str:
 <header class='masthead'><div><p class='eyebrow'>KNOWLEDGE FOOTPRINT / 书签内容分析</p><h1>你的知识版图</h1><p>这不是书签清单，而是从目录、来源与内容类型中提取出的可验证知识结构。</p></div><aside>生成于 {html.escape(audit['generated_at'])}<br>输入：{html.escape(audit['format'])} 收藏夹<br>统计层由本地命令生成；语义层标明 AI 解读。</aside></header>
 <section class='cards'>{cards}</section>
 {insight_section(audit.get('ai_insights', {}))}
-<section class='section split'><div><p class='eyebrow'>主题分布</p><h2>知识投入在哪里</h2>{bar_rows(topics)}</div><div><p class='eyebrow'>内容形态</p><h2>你保存的是什么</h2>{bar_rows(content_types)}</div></section>
+<section class='section split'><div><p class='eyebrow'>现有目录结构</p><h2>当前如何组织</h2>{bar_rows(topics)}</div><div><p class='eyebrow'>内容形态</p><h2>你保存的是什么</h2>{bar_rows(content_types)}</div></section>
 <section class='section split'><div><p class='eyebrow'>来源结构</p><h2>高频信息来源</h2>{bar_rows(domains)}</div><div class='evidence'><p class='eyebrow'>数据所见</p><h2>结构性信号</h2><ul>{escaped_lines(observations)}</ul></div></section>
 <section class='section'><p class='eyebrow'>健康度</p><h2>需要处理的不是“多”，而是“失去可用性”</h2><table><thead><tr><th>检查项</th><th>数量</th></tr></thead><tbody>{quality_html}</tbody></table><p class='note'>不同章节锚点不视为重复。重定向、标题变化、登录限制和超时均只作为复核信号，不会自动删除。</p></section>
 </main></body></html>"""
 
 
 def ai_brief_markdown(audit: dict[str, Any]) -> str:
-    overview = audit["semantic_overview"]
+    overview = audit["collection_overview"]
     lines = ["# 收藏夹 AI 语义画像简报", "", "只根据下面的书签证据作出结论；不要推断敏感个人属性。", "", "## 确定事实", ""]
     for key, value in audit["stats"].items():
         lines.append(f"- {key}: {value}")
-    lines.extend(["", "## 主题样本", ""])
-    for theme, samples in overview["theme_samples"].items():
+    lines.extend(["", "## 现有目录样本", ""])
+    for theme, samples in overview["folder_samples"].items():
         lines.append(f"### {theme}")
         for item in samples:
             lines.append(f"- {item['title']} ｜ {' / '.join(item['path'])} ｜ {item['url']}")
         lines.append("")
-    lines.extend(["## 输出格式", "", "生成 JSON 对象，字段为：headline、summary、focus_areas（name、interpretation、evidence）、information_habits（字符串数组）、next_actions（priority、action、evidence）。每项都应能回溯到上述书签证据。"])
+    lines.extend(["## 输出要求", "", "不要沿用任何预设主题。先从当前收藏夹的目录、标题、来源与样本中归纳最能解释这位用户的 4 至 8 个主题；尊重已有稳定目录，必要时提出更好的分类方案。生成 JSON 对象，字段为：headline、summary、taxonomy（name、definition、evidence）、focus_areas（name、interpretation、evidence）、information_habits（字符串数组）、next_actions（priority、action、evidence）。每项都应能回溯到上述书签证据。"])
     return "\n".join(lines)
 
 
@@ -367,7 +369,7 @@ def main() -> int:
     folder_count = len(folders)
     domains = Counter((urlsplit(item["url"]).hostname or "(无域名)").lower() for item in items)
     topics = Counter((item["path"][1] if len(item["path"]) > 1 else item["path"][0] if item["path"] else "未分类") for item in items)
-    overview = semantic_overview(items, domains)
+    overview = collection_overview(items, domains)
     links: dict[str, dict[str, Any]] = {}
     if args.check_links:
         unique_urls = sorted({item["normalized_url"]: item["url"] for item in items}.items())
@@ -393,7 +395,7 @@ def main() -> int:
         "format": detected_format,
         "stats": {"bookmark_count": len(items), "folder_count": folder_count, "duplicate_group_count": len(exact_duplicates), "related_url_group_count": len(related_url_groups)},
         "profile": {"top_folders": dict(topics.most_common()), "top_domains": dict(domains.most_common())},
-        "semantic_overview": overview,
+        "collection_overview": overview,
         "ai_insights": load_ai_insights(args.ai_insights),
         "duplicates": exact_duplicates,
         "related_url_groups": related_url_groups,
