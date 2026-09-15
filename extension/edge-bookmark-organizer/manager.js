@@ -4,6 +4,7 @@ const archivePrefix = 'bookmark-archive-';
 const maxArchives = 30;
 let scan = null;
 let validatedPlan = null;
+let validatedPlanSignature = null;
 
 const status = document.querySelector('#status');
 const items = document.querySelector('#items');
@@ -12,6 +13,7 @@ const scanButton = document.querySelector('#scan');
 const copyButton = document.querySelector('#copy');
 const previewButton = document.querySelector('#preview');
 const applyButton = document.querySelector('#apply');
+const planInput = document.querySelector('#plan');
 
 function canonical(url) {
   try {
@@ -31,10 +33,6 @@ function walk(node, ancestors, visit) {
   for (const child of node.children || []) walk(child, path, visit);
 }
 
-function folderPath(node, ancestors = []) {
-  return node.title ? [...ancestors, node.title] : ancestors;
-}
-
 async function scanBookmarks() {
   const roots = await chrome.bookmarks.getTree();
   const folders = [];
@@ -49,7 +47,7 @@ async function scanBookmarks() {
   }
   if (!temporary) throw new Error(`未找到“${temporaryFolderName}”文件夹。`);
   const temporaryUrls = [];
-  walk(temporary, folderPath(temporary.parentId ? temporary : { title: '' }), (node) => {
+  walk(temporary, [], (node) => {
     if (node.url) temporaryUrls.push({ id: node.id, title: node.title, url: node.url, canonical: canonical(node.url) });
   });
   const duplicateMap = new Map();
@@ -90,18 +88,40 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
-function bookmarkNodeToHtml(node, depth = 1) {
+function netscapeTimestamp(value) {
+  const milliseconds = Number(value);
+  return Number.isFinite(milliseconds) && milliseconds > 0 ? Math.floor(milliseconds / 1000) : null;
+}
+
+function dateAttribute(name, value) {
+  const timestamp = netscapeTimestamp(value);
+  return timestamp === null ? '' : ` ${name}="${timestamp}"`;
+}
+
+function rootFolderAttribute(node, index) {
+  const id = String(node.id || '');
+  if (id === '1' || index === 0) return ' PERSONAL_TOOLBAR_FOLDER="true"';
+  if (id === '2' || index === 1) return ' UNFILED_BOOKMARKS_FOLDER="true"';
+  if (id === '3' || index === 2) return ' MOBILE_BOOKMARKS_FOLDER="true"';
+  return '';
+}
+
+function bookmarkNodeToHtml(node, depth = 1, folderAttribute = '') {
   const indent = '  '.repeat(depth);
   if (node.url) {
-    return `${indent}<DT><A HREF="${escapeHtml(node.url)}">${escapeHtml(node.title)}</A>\n`;
+    const addDate = dateAttribute('ADD_DATE', node.dateAdded);
+    return `${indent}<DT><A HREF="${escapeHtml(node.url)}"${addDate}>${escapeHtml(node.title)}</A>\n`;
   }
   const title = escapeHtml(node.title || '未命名文件夹');
   const children = (node.children || []).map(child => bookmarkNodeToHtml(child, depth + 1)).join('');
-  return `${indent}<DT><H3>${title}</H3>\n${indent}<DL><p>\n${children}${indent}</DL><p>\n`;
+  const addDate = dateAttribute('ADD_DATE', node.dateAdded);
+  const lastModified = dateAttribute('LAST_MODIFIED', node.dateGroupModified);
+  return `${indent}<DT><H3${addDate}${lastModified}${folderAttribute}>${title}</H3>\n${indent}<DL><p>\n${children}${indent}</DL><p>\n`;
 }
 
 function bookmarksToNetscapeHtml(roots) {
-  const body = roots.flatMap(root => root.children || []).map(node => bookmarkNodeToHtml(node)).join('');
+  const rootFolders = roots.flatMap(root => root.children || []);
+  const body = rootFolders.map((node, index) => bookmarkNodeToHtml(node, 1, rootFolderAttribute(node, index))).join('');
   return [
     '<!DOCTYPE NETSCAPE-Bookmark-file-1>',
     '<!-- This is an automatically generated file. It will be read and overwritten. -->',
@@ -165,11 +185,11 @@ async function archiveCurrentBookmarks() {
   }
 }
 
-function isOwnArchive(item) {
+function isManagedArchive(item) {
   const escapedDirectory = archiveDirectory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const escapedPrefix = archivePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const filenamePattern = new RegExp(`[\\\\/]${escapedDirectory}[\\\\/]${escapedPrefix}.+\\.html$`, 'i');
-  return item.byExtensionId === chrome.runtime.id && item.state === 'complete' && filenamePattern.test(item.filename || '');
+  return item.state === 'complete' && filenamePattern.test(item.filename || '');
 }
 
 async function trimArchives() {
@@ -178,7 +198,7 @@ async function trimArchives() {
     orderBy: ['-startTime'],
     limit: 0
   });
-  const oldArchives = downloads.filter(isOwnArchive).slice(maxArchives);
+  const oldArchives = downloads.filter(isManagedArchive).slice(maxArchives);
   const removed = [];
   const warnings = [];
   for (const item of oldArchives) {
@@ -206,7 +226,7 @@ async function ensureFolder(path) {
 
 function validatePlan() {
   if (!scan) throw new Error('请先扫描临时收藏。');
-  const raw = document.querySelector('#plan').value.trim();
+  const raw = planInput.value.trim();
   let plan;
   try {
     plan = JSON.parse(raw);
@@ -232,12 +252,27 @@ function validatePlan() {
   return checked;
 }
 
+function planSignature(plan) {
+  return JSON.stringify(plan);
+}
+
+planInput.addEventListener('input', () => {
+  if (!validatedPlan) return;
+  validatedPlan = null;
+  validatedPlanSignature = null;
+  applyButton.disabled = true;
+  result.className = 'error';
+  result.textContent = '方案内容已改变，请重新校验。';
+});
+
 scanButton.addEventListener('click', async () => {
   try {
     scanButton.disabled = true;
     status.textContent = '正在扫描…';
     scan = await scanBookmarks();
     renderScan(scan);
+    validatedPlan = null;
+    validatedPlanSignature = null;
     result.textContent = '';
     applyButton.disabled = true;
   } catch (error) {
@@ -253,11 +288,13 @@ copyButton.addEventListener('click', async () => {
 previewButton.addEventListener('click', () => {
   try {
     validatedPlan = validatePlan();
+    validatedPlanSignature = planSignature(validatedPlan);
     result.className = '';
     result.textContent = `已校验：将移动 ${validatedPlan.length} 条收藏；必要时会创建不存在的目标文件夹。`;
     applyButton.disabled = false;
   } catch (error) {
     validatedPlan = null;
+    validatedPlanSignature = null;
     applyButton.disabled = true;
     result.className = 'error';
     result.textContent = `未通过：${error.message}`;
@@ -268,6 +305,10 @@ applyButton.addEventListener('click', async () => {
   if (!validatedPlan) return;
   try {
     applyButton.disabled = true;
+    const currentPlan = validatePlan();
+    if (planSignature(currentPlan) !== validatedPlanSignature) {
+      throw new Error('方案内容已改变，请重新校验后再执行。');
+    }
     result.className = '';
     result.textContent = '正在归档当前全部收藏夹…';
     const archive = await archiveCurrentBookmarks();
@@ -289,8 +330,11 @@ applyButton.addEventListener('click', async () => {
     scan = await scanBookmarks();
     renderScan(scan);
     validatedPlan = null;
+    validatedPlanSignature = null;
   } catch (error) {
+    validatedPlan = null;
+    validatedPlanSignature = null;
     result.className = 'error';
     result.textContent = `执行中断：${error.message}`;
-  } finally { applyButton.disabled = false; }
+  } finally { applyButton.disabled = !validatedPlan; }
 });

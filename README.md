@@ -62,7 +62,7 @@ python .\.agents\skills\bookmark-organizer\scripts\audit_bookmarks.py `
 
 加入 `--check-links` 才会检查链接。用 `--baseline <旧 audit.json>` 检查链接状态、标题和重定向变化。脚本还会生成 `ai-profile-brief.md`；Agent 据此写出可审查的 `ai-insights.json` 后，以 `--ai-insights` 再运行一次即可得到深度画像。
 
-扩展接收的移动计划示例见 [sample-move-plan.json](examples/sample-move-plan.json)。在扩展中先“校验方案”，再点击“先归档，再执行方案”。扩展会将完整收藏夹导出为可导入的 HTML，写入浏览器下载目录下的 `Bookmark-Organizer-Archives`。归档下载成功才会开始移动；自动按下载时间保留最近 30 份，并只删除该扩展自己生成的最早归档。
+扩展接收的移动计划示例见 [sample-move-plan.json](examples/sample-move-plan.json)。在扩展中先“校验方案”，再点击“先归档，再执行方案”；校验后若修改文本，必须重新校验。扩展会将完整收藏夹导出为带根目录和时间属性的可导入 HTML，写入浏览器下载目录下的 `Bookmark-Organizer-Archives`。归档下载成功才会开始移动；自动按下载时间保留严格命名的最近 30 份，清理不依赖可能变化的扩展 ID。
 
 如需回退，在浏览器的“导入收藏夹/书签”功能中选择该目录中的归档 HTML。归档位置跟随浏览器当前的下载目录；若希望放在其他磁盘，请先在浏览器设置中修改下载位置。
 
@@ -73,7 +73,14 @@ python .\.agents\skills\bookmark-organizer\scripts\audit_bookmarks.py `
 # 使用 Chrome 时：.\installer\doctor.ps1 -Browser Chrome
 ```
 
-自检会核验扩展名称、Manifest V3、最低版本 `0.2.0`，以及 `bookmarks`、`downloads` 两项必要权限。
+自检会核验扩展名称、Manifest V3、最低版本 `0.3.0`，以及 `bookmarks`、`downloads` 两项必要权限。
+
+开发改动可运行回归测试：
+
+```powershell
+python -m unittest discover -s .\tests -p "test_*.py"
+node .\tests\test_manager.js
+```
 
 - 更新仓库后，如需覆盖扩展源码，显式运行 `bootstrap.ps1 -Browser Edge -UpdateExtension`，然后在 Edge 扩展页点击“重新加载”。
 - 如果全局技能已存在，安装脚本不会覆盖它；这是为了保护你本机的定制。可以先比较差异后再手动迁移。

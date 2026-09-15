@@ -15,12 +15,14 @@ import html
 import json
 import re
 import sys
+import threading
+import time
 from collections import Counter, defaultdict
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import quote_plus, unquote_plus, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 TRACKING_KEYS = {"fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid", "_hsenc", "_hsmi"}
@@ -36,6 +38,26 @@ CONTENT_TYPE_RULES = {
 }
 
 
+def normalized_query(value: str) -> str:
+    """Sort query fields while preserving valueless parameters such as ``?flag``."""
+    if not value:
+        return ""
+    fields: list[tuple[str, str, bool, str]] = []
+    for raw_field in value.split("&"):
+        raw_key, separator, raw_value = raw_field.partition("=")
+        key = unquote_plus(raw_key)
+        query_value = unquote_plus(raw_value) if separator else ""
+        lowered_key = key.lower()
+        if lowered_key in TRACKING_KEYS or lowered_key.startswith("utm_"):
+            continue
+        rendered = quote_plus(key)
+        if separator:
+            rendered += f"={quote_plus(query_value)}"
+        fields.append((lowered_key, query_value, bool(separator), rendered))
+    fields.sort(key=lambda field: (field[0], field[1], field[2], field[3]))
+    return "&".join(field[3] for field in fields)
+
+
 def normalized_url(value: str, *, keep_fragment: bool = False) -> str:
     """Normalize only safe URL differences and remove known tracking parameters."""
     try:
@@ -47,12 +69,8 @@ def normalized_url(value: str, *, keep_fragment: bool = False) -> str:
         if port and not ((scheme == "https" and port == 443) or (scheme == "http" and port == 80)):
             netloc = f"{host}:{port}"
         path = parts.path.rstrip("/") or "/"
-        pairs = [
-            (key, val) for key, val in parse_qsl(parts.query, keep_blank_values=True)
-            if key.lower() not in TRACKING_KEYS and not key.lower().startswith("utm_")
-        ]
         fragment = parts.fragment if keep_fragment else ""
-        return urlunsplit((scheme, netloc, path, urlencode(pairs, doseq=True), fragment))
+        return urlunsplit((scheme, netloc, path, normalized_query(parts.query), fragment))
     except ValueError:
         return value.strip()
 
@@ -61,6 +79,7 @@ class NetscapeBookmarks(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.items: list[dict[str, Any]] = []
+        self.folders: set[tuple[str, ...]] = set()
         self._folder_stack: list[tuple[str, int]] = []
         self._dl_depth = 0
         self._pending_folder: str | None = None
@@ -73,6 +92,8 @@ class NetscapeBookmarks(HTMLParser):
         if tag.lower() == "dl":
             self._dl_depth += 1
             if self._pending_folder:
+                folder_path = tuple([name for name, _depth in self._folder_stack] + [self._pending_folder])
+                self.folders.add(folder_path)
                 self._folder_stack.append((self._pending_folder, self._dl_depth))
                 self._pending_folder = None
         elif tag.lower() in {"h3", "a"}:
@@ -106,13 +127,16 @@ class NetscapeBookmarks(HTMLParser):
             self._text.append(data)
 
 
-def chromium_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def chromium_items(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], set[tuple[str, ...]]]:
     entries: list[dict[str, Any]] = []
+    folders: set[tuple[str, ...]] = set()
 
     def visit(node: dict[str, Any], path: list[str]) -> None:
         node_type = node.get("type")
         name = str(node.get("name", ""))
         next_path = path + ([name] if node_type == "folder" and name else [])
+        if node_type == "folder" and name:
+            folders.add(tuple(next_path))
         if node_type == "url":
             entries.append({"id": str(node.get("id", "")), "title": name, "url": str(node.get("url", "")), "path": path})
         for child in node.get("children", []):
@@ -127,20 +151,21 @@ def chromium_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
         root_copy["name"] = labels.get(key, root.get("name", key))
         root_copy["type"] = "folder"
         visit(root_copy, [])
-    return entries
+    return entries, folders
 
 
-def load_items(source: Path, explicit_format: str) -> tuple[list[dict[str, Any]], str]:
+def load_items(source: Path, explicit_format: str) -> tuple[list[dict[str, Any]], str, set[tuple[str, ...]]]:
     raw = source.read_text(encoding="utf-8-sig", errors="replace")
     fmt = explicit_format
     if fmt == "auto":
         fmt = "chromium" if raw.lstrip().startswith("{") else "html"
     if fmt == "chromium":
-        return chromium_items(json.loads(raw)), fmt
+        items, folders = chromium_items(json.loads(raw))
+        return items, fmt, folders
     if fmt == "html":
         parser = NetscapeBookmarks()
         parser.feed(raw)
-        return parser.items, fmt
+        return parser.items, fmt, parser.folders
     raise ValueError(f"Unsupported format: {fmt}")
 
 
@@ -151,27 +176,67 @@ def title_from_bytes(content: bytes) -> str | None:
     return " ".join(html.unescape(match.group(1).decode("utf-8", errors="replace")).split())[:300]
 
 
-def check_one(url: str, timeout: float) -> dict[str, Any]:
+def http_result_status(code: int) -> str:
+    if code in UNVERIFIED_CODES or 500 <= code <= 599:
+        return "unverified"
+    return "unavailable"
+
+
+class DomainRateLimiter:
+    def __init__(self, minimum_interval: float) -> None:
+        self.minimum_interval = max(0.0, minimum_interval)
+        self._lock = threading.Lock()
+        self._next_request: dict[str, float] = {}
+
+    def wait(self, url: str) -> None:
+        if not self.minimum_interval:
+            return
+        domain = (urlsplit(url).hostname or "").lower()
+        with self._lock:
+            now = time.monotonic()
+            reserved = max(now, self._next_request.get(domain, now))
+            self._next_request[domain] = reserved + self.minimum_interval
+        delay = reserved - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+
+
+def retry_delay(error: HTTPError | None, attempt: int) -> float:
+    retry_after = error.headers.get("Retry-After") if error and error.headers else None
+    try:
+        return min(30.0, max(float(retry_after), 0.5 * (2 ** attempt)))
+    except (TypeError, ValueError):
+        return min(30.0, 0.5 * (2 ** attempt))
+
+
+def check_one(url: str, timeout: float, limiter: DomainRateLimiter | None = None, retries: int = 2) -> dict[str, Any]:
     headers = {"User-Agent": "Mozilla/5.0 BookmarkOrganizer/1.0", "Accept": "text/html,*/*;q=0.8"}
-    try:
-        request = Request(url, headers=headers, method="HEAD")
-        with urlopen(request, timeout=timeout) as response:
-            return {"status": "available", "http_status": response.status, "final_url": response.geturl(), "page_title": None}
-    except HTTPError as error:
-        if error.code not in {405, 501}:
-            status = "unverified" if error.code in UNVERIFIED_CODES else "unavailable"
-            return {"status": status, "http_status": error.code, "final_url": error.geturl(), "page_title": None}
-    except (URLError, TimeoutError, ValueError) as error:
-        return {"status": "unverified", "http_status": None, "final_url": None, "page_title": None, "error": str(error)[:180]}
-    try:
-        request = Request(url, headers={**headers, "Range": "bytes=0-65535"}, method="GET")
-        with urlopen(request, timeout=timeout) as response:
-            return {"status": "available", "http_status": response.status, "final_url": response.geturl(), "page_title": title_from_bytes(response.read(65536))}
-    except HTTPError as error:
-        status = "unverified" if error.code in UNVERIFIED_CODES else "unavailable"
-        return {"status": status, "http_status": error.code, "final_url": error.geturl(), "page_title": None}
-    except (URLError, TimeoutError, ValueError) as error:
-        return {"status": "unverified", "http_status": None, "final_url": None, "page_title": None, "error": str(error)[:180]}
+    for method in ("HEAD", "GET"):
+        for attempt in range(max(0, retries) + 1):
+            if limiter:
+                limiter.wait(url)
+            request_headers = headers if method == "HEAD" else {**headers, "Range": "bytes=0-65535"}
+            try:
+                request = Request(url, headers=request_headers, method=method)
+                with urlopen(request, timeout=timeout) as response:
+                    title = title_from_bytes(response.read(65536)) if method == "GET" else None
+                    return {"status": "available", "http_status": response.status, "final_url": response.geturl(), "page_title": title}
+            except HTTPError as error:
+                if method == "HEAD" and error.code in {405, 501}:
+                    break
+                status = http_result_status(error.code)
+                if status == "unverified" and attempt < max(0, retries):
+                    time.sleep(retry_delay(error, attempt))
+                    continue
+                return {"status": status, "http_status": error.code, "final_url": error.geturl(), "page_title": None}
+            except ValueError as error:
+                return {"status": "unverified", "http_status": None, "final_url": None, "page_title": None, "error": str(error)[:180]}
+            except (URLError, TimeoutError) as error:
+                if attempt < max(0, retries):
+                    time.sleep(retry_delay(None, attempt))
+                    continue
+                return {"status": "unverified", "http_status": None, "final_url": None, "page_title": None, "error": str(error)[:180]}
+    return {"status": "unverified", "http_status": None, "final_url": None, "page_title": None, "error": "No supported request method succeeded."}
 
 
 def duplicate_groups(items: list[dict[str, Any]], key_name: str) -> list[dict[str, Any]]:
@@ -204,8 +269,11 @@ def compare_baseline(current: list[dict[str, Any]], baseline_path: Path | None) 
 def classify_item(item: dict[str, Any], rules: dict[str, tuple[str, ...]], fallback: str) -> str:
     text = " ".join([item["title"], item["url"], *item["path"]]).lower()
     scores = {label: sum(1 for word in words if word.lower() in text) for label, words in rules.items()}
-    label, score = max(scores.items(), key=lambda pair: pair[1])
-    return label if score else fallback
+    best_score = max(scores.values(), default=0)
+    if not best_score:
+        return fallback
+    winners = [label for label, score in scores.items() if score == best_score]
+    return winners[0] if len(winners) == 1 else "混合／待判断"
 
 
 def collection_overview(items: list[dict[str, Any]], domains: Counter[str]) -> dict[str, Any]:
@@ -327,6 +395,8 @@ def ai_brief_markdown(audit: dict[str, Any]) -> str:
     lines = ["# 收藏夹 AI 语义画像简报", "", "只根据下面的书签证据作出结论；不要推断敏感个人属性。", "", "## 确定事实", ""]
     for key, value in audit["stats"].items():
         lines.append(f"- {key}: {value}")
+    if not audit.get("execution", {}).get("runtime_ids_available", False):
+        lines.extend(["", "> 当前输入为 HTML 导出，书签没有浏览器运行时 ID。它可用于审计、画像和离线重组；实时移动计划必须重新使用配套扩展扫描。"])
     lines.extend(["", "## 现有目录样本", ""])
     for theme, samples in overview["folder_samples"].items():
         lines.append(f"### {theme}")
@@ -357,15 +427,27 @@ def main() -> int:
     parser.add_argument("--check-links", action="store_true")
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--workers", type=int, default=12)
+    parser.add_argument("--per-domain-delay", type=float, default=0.5, help="Minimum seconds between requests to the same domain.")
+    parser.add_argument("--retries", type=int, default=2, help="Retries for transient HTTP and network failures.")
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--ai-insights", type=Path, help="Optional evidence-based AI interpretation JSON.")
     args = parser.parse_args()
+    if args.timeout <= 0:
+        parser.error("--timeout must be greater than zero.")
+    if args.workers <= 0:
+        parser.error("--workers must be greater than zero.")
+    if args.per_domain_delay < 0:
+        parser.error("--per-domain-delay cannot be negative.")
+    if args.retries < 0:
+        parser.error("--retries cannot be negative.")
+    if args.baseline and not args.check_links:
+        print("[INFO] --baseline implies --check-links; current links will be checked before comparison.", file=sys.stderr)
+        args.check_links = True
 
-    items, detected_format = load_items(args.input, args.format)
+    items, detected_format, folders = load_items(args.input, args.format)
     for item in items:
         item["normalized_url"] = normalized_url(item["url"])
         item["exact_url"] = normalized_url(item["url"], keep_fragment=True)
-    folders = {tuple(item["path"]) for item in items if item["path"]}
     folder_count = len(folders)
     domains = Counter((urlsplit(item["url"]).hostname or "(无域名)").lower() for item in items)
     topics = Counter((item["path"][1] if len(item["path"]) > 1 else item["path"][0] if item["path"] else "未分类") for item in items)
@@ -373,8 +455,9 @@ def main() -> int:
     links: dict[str, dict[str, Any]] = {}
     if args.check_links:
         unique_urls = sorted({item["normalized_url"]: item["url"] for item in items}.items())
+        limiter = DomainRateLimiter(args.per_domain_delay)
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
-            futures = {executor.submit(check_one, url, args.timeout): key for key, url in unique_urls}
+            futures = {executor.submit(check_one, url, args.timeout, limiter, args.retries): key for key, url in unique_urls}
             for future in concurrent.futures.as_completed(futures):
                 key = futures[future]
                 try:
@@ -393,6 +476,11 @@ def main() -> int:
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "source": str(args.input),
         "format": detected_format,
+        "execution": {
+            "runtime_ids_available": detected_format == "chromium",
+            "extension_plan_requires_live_scan": True,
+            "note": "HTML exports do not contain browser runtime bookmark IDs; use the companion extension scan before applying a live move plan." if detected_format == "html" else "Runtime IDs came from the Chromium source and must still be refreshed by the companion extension before a live move.",
+        },
         "stats": {"bookmark_count": len(items), "folder_count": folder_count, "duplicate_group_count": len(exact_duplicates), "related_url_group_count": len(related_url_groups)},
         "profile": {"top_folders": dict(topics.most_common()), "top_domains": dict(domains.most_common())},
         "collection_overview": overview,

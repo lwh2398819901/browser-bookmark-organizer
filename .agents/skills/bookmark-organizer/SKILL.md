@@ -25,6 +25,8 @@ python scripts/audit_bookmarks.py --input <Bookmarks-or-export.html> --output-di
 
 仅在用户要求可用性检查时使用 `--check-links`。检查重定向、标题和可用性变化时使用 `--baseline <previous-audit.json>`。401、403、429 或超时不能判定为失效链接，只能报告为“无法确认”。
 
+`--baseline` 会自动启用当前链接检查，避免产生“零变化”的静默假象。大量检查可按需调整 `--timeout`、`--workers`、`--per-domain-delay` 和 `--retries`。HTML 导出不包含浏览器运行时书签 ID，只用于审计、画像和离线重组；实时移动计划必须重新通过配套扩展扫描获得 ID。
+
 ## AI 语义画像
 
 审计始终会写入 `ai-profile-brief.md`，其中包含受控范围的事实和代表书签。命令不会预设用户的主题分类；用户要求深度画像或语义归档时，使用当前 AI 大模型从该用户数据中动态归纳主题，再整理成 `ai-insights.json` 或可复核的移动计划。阅读[动态分类](references/dynamic-classification.md)。
