@@ -521,11 +521,16 @@
       archive = await core.archiveCurrentBookmarks();
       const cleanup = await core.trimArchives();
       setMessage(result, '备份成功，正在执行移动…');
+      const originalPlacements = new Map();
       for (const item of currentPlan) {
         const current = (await chrome.bookmarks.get(item.id))[0];
         if (!current) throw new Error(`无法读取书签 ${item.id}。`);
-        const originalParentId = current.parentId;
-        const originalIndex = current.index;
+        originalPlacements.set(item.id, { parentId: current.parentId, index: current.index });
+      }
+      for (const item of currentPlan) {
+        const placement = originalPlacements.get(item.id);
+        const originalParentId = placement.parentId;
+        const originalIndex = placement.index;
         const destination = await ensureFolder(item.folderPath);
         await chrome.bookmarks.move(item.id, { parentId: destination.id });
         moved.push({

@@ -245,6 +245,31 @@ async function testPopupDuplicateGuard() {
   }
 }
 
+async function testUndoRestoresOriginalOrder() {
+  const context = makeEnvironment();
+  const temporary = context.findNode('9');
+  temporary.children.push(
+    { id: '10b', parentId: '9', index: 1, title: 'Second', url: 'https://example.test/?b=2' },
+    { id: '10c', parentId: '9', index: 2, title: 'Third', url: 'https://example.test/?c=3' }
+  );
+  load(context, extensionFile('shared.js'));
+  vm.runInContext(fs.readFileSync(extensionFile('manager.js'), 'utf8'), context);
+  await tick();
+  await context.elements.get('#scan').listeners.click();
+  context.elements.get('#plan').value = JSON.stringify([
+    { id: '10', folderPath: '收藏夹栏/开发' },
+    { id: '10b', folderPath: '收藏夹栏/开发' },
+    { id: '10c', folderPath: '收藏夹栏/开发' }
+  ]);
+  context.elements.get('#validate-plan').listeners.click();
+  await context.elements.get('#apply').listeners.click();
+  const undoButton = findButton(context.elements.get('#history-list'), '撤销本次整理');
+  if (!undoButton) throw new Error('Undo action was not rendered.');
+  await undoButton.listeners.click();
+  const order = (context.findNode('9').children || []).map(node => node.id).join(',');
+  if (order !== '10,10b,10c') throw new Error(`Undo did not restore the original order: ${order}`);
+}
+
 async function testLocalizedBookmarkBar() {
   const context = makeEnvironment();
   context.tree[0].children[0].title = 'Bookmarks bar';
@@ -263,6 +288,7 @@ async function testLocalizedBookmarkBar() {
 (async () => {
   await testManager();
   await testPopupDuplicateGuard();
+  await testUndoRestoresOriginalOrder();
   await testLocalizedBookmarkBar();
   console.log('Extension 1.0 behavior checks passed.');
 })().catch(error => {

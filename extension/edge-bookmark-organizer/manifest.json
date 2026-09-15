@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "收藏夹整理助手（本地）",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "本地完成收藏、防重复、备份恢复、方案预览和可撤销的收藏夹整理。",
   "permissions": ["bookmarks", "downloads", "activeTab", "storage"],
   "action": {

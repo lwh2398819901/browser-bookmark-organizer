@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 EXPECTED_NAME = "收藏夹整理助手（本地）"
-MINIMUM_VERSION = (1, 0, 1)
+MINIMUM_VERSION = (1, 0, 2)
 REQUIRED_PERMISSIONS = {"bookmarks", "downloads", "activeTab", "storage"}
 BROWSER_NAMES = {"edge": "Microsoft-Edge", "chrome": "Google-Chrome", "brave": "Brave"}
 
@@ -51,7 +51,7 @@ def validate_manifest(extension_dir: Path) -> dict:
     if manifest.get("manifest_version") != 3:
         raise RuntimeError("扩展不是 Manifest V3。")
     if version_tuple(manifest.get("version", "")) < MINIMUM_VERSION:
-        raise RuntimeError("扩展版本低于 1.0.1。")
+        raise RuntimeError("扩展版本低于 1.0.2。")
     if missing:
         raise RuntimeError(f"扩展缺少权限：{', '.join(sorted(missing))}")
     return manifest

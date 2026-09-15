@@ -14,10 +14,10 @@ class InstallerTests(unittest.TestCase):
     def test_repository_manifest_is_valid(self):
         extension = INSTALLER_PATH.parents[1] / "extension" / "edge-bookmark-organizer"
         manifest = installer.validate_manifest(extension)
-        self.assertEqual(manifest["version"], "1.0.1")
+        self.assertEqual(manifest["version"], "1.0.2")
 
     def test_version_parsing_is_strict(self):
-        self.assertGreaterEqual(installer.version_tuple("1.0.1"), installer.MINIMUM_VERSION)
+        self.assertGreaterEqual(installer.version_tuple("1.0.2"), installer.MINIMUM_VERSION)
         self.assertLess(installer.version_tuple("1.0.0"), installer.MINIMUM_VERSION)
         self.assertEqual(installer.version_tuple("not-a-version"), ())
 

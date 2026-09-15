@@ -65,7 +65,7 @@ if (Test-Path -LiteralPath $extensionTarget) {
 $manifest = Get-Content -LiteralPath (Join-Path $extensionTarget 'manifest.json') -Encoding utf8 -Raw | ConvertFrom-Json
 $expectedName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('5pS26JeP5aS55pW055CG5Yqp5omL77yI5pys5Zyw77yJ'))
 $versionValid = $false
-try { $versionValid = ([version]$manifest.version -ge [version]'1.0.1') } catch { $versionValid = $false }
+try { $versionValid = ([version]$manifest.version -ge [version]'1.0.2') } catch { $versionValid = $false }
 $permissions = @($manifest.permissions)
 if ($manifest.name -ne $expectedName -or $manifest.manifest_version -ne 3 -or -not $versionValid -or
     -not ($permissions -contains 'bookmarks') -or -not ($permissions -contains 'downloads') -or
