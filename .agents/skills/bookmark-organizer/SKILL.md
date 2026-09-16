@@ -42,6 +42,8 @@ python scripts/bookmarkctl.py --pretty apply-plan --plan-token <token> --confirm
 
 一次正常的日常整理只调用三次扩展：`scan → validate-plan → apply-plan`。`apply-plan` 内部会先创建完整 HTML 归档，Agent 不得在它之前额外调用 `backup`；否则同一次整理会产生重复备份。`status` 只用于桥接失败后的诊断，`archives` 和 `operations` 只在用户明确查询或需要核对不确定结果时调用，不得作为每次整理的固定步骤。若命令结果丢失或超时，先用 `scan`、`archives` 或 `operations` 核对实际状态，再决定是否重试，禁止盲目重复调用写入命令。
 
+Windows 上宿主工具若不可靠地回传 stdout，优先给 `bookmarkctl.py` 加 `--output <临时 JSON 文件>` 后读取文件；计划文件读取兼容带 BOM 和无 BOM 的 UTF-8。不要使用乱码输出生成 `folderPath`，具体编码处理见[本地执行扩展](references/local-extension.md)。
+
 实时 ID 只能原样取自 `bookmarkctl scan`。不得从 Chromium `Bookmarks`、HTML 导出或自行编写的解析脚本中提取、猜测或生成执行 ID。`bookmarkctl` 已支持的动作不得另写脚本重复实现；确有通用能力缺口时报告缺口并扩展正式工具，不在单次任务中造临时工具。插件页面只作为人工备用入口。
 
 若桥接命令失败，先运行 `status` 并根据错误检查安装、浏览器和扩展是否已重新加载；不得立即回退到视觉点击。只有用户明确要求使用页面，或本地桥接确实不可恢复时，才使用人工界面流程。

@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -23,6 +24,20 @@ SPEC.loader.exec_module(bookmarkctl)
 
 
 class BridgePageTests(unittest.TestCase):
+    def test_write_json_result_is_utf8_without_bom(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "result.json"
+            bookmarkctl.write_json_result({"folderPath": "收藏夹栏/开发"}, path, pretty=True)
+            data = path.read_bytes()
+            self.assertFalse(data.startswith(b"\xef\xbb\xbf"))
+            self.assertEqual(json.loads(data.decode("utf-8"))["folderPath"], "收藏夹栏/开发")
+
+    def test_read_plan_accepts_utf8_with_or_without_bom(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "plan.json"
+            path.write_text('\ufeff[{"id":"1","folderPath":"收藏夹栏/开发"}]', encoding="utf-8")
+            self.assertEqual(bookmarkctl.read_plan(str(path)), [{"id": "1", "folderPath": "收藏夹栏/开发"}])
+
     def test_javascript_literal_escapes_html_and_line_separators(self):
         hostile = '</script><img src=x onerror=1>\u2028\u2029&'
         literal = bookmarkctl.javascript_literal(hostile)

@@ -32,3 +32,14 @@ macOS、Linux 或 Brave 优先运行仓库的 `python installer/install.py --bro
 - 每次插件整理在本地保存原目录与位置，最近 20 次显示在操作记录中。撤销前再次备份，只把书签移回原位置与原有顺序，不删除整理过程中创建的空目录。
 - 操作记录的“清空记录”只删除插件本地保存的这些记录，不动收藏夹、也不删除任何备份文件；用户点击该明确按钮后直接执行并显示页面内结果，不再弹出确认框。
 - 当前版本不执行标题重命名、URL 替换、书签删除或目录删除。实时删除需求只能先给出可复核清单，再由用户使用浏览器原生操作；离线 HTML 重组则遵守技能中“保留源文件并取得明确删除授权”的边界。
+
+## Windows 命令行环境的输出与编码
+
+Windows 上由 Agent 代跑 `scripts/bookmarkctl.py` 时，命令可能正常退出，但输出在到达模型前就已损坏。以下两点都会直接污染 `folderPath`：
+
+- **优先使用文件输出**：需要让 Agent 读取 `scan`、`status` 或其他 JSON 结果时，可加 `--output <临时目录>\result.json`。脚本会直接写入无 BOM UTF-8 文件，避免 PowerShell 管道转码，也避免宿主工具不回传 stdout。写入后再用读取工具打开该文件；输出文件只能放在工作区或系统临时目录。
+- **必须使用管道时先设置编码**：PowerShell 5.1 可能按本地代码页解码 Python 输出，中文目录名会变成 `鏀惰棌澶规爮` 这类乱码。执行前设置 `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8`、`$OutputEncoding = [System.Text.Encoding]::UTF8`，并让 Python 保持一致：`$env:PYTHONIOENCODING="utf-8"`。乱码的 `folderPath`、`existingFolders` 既不是命令返回的原文，也无法通过目录校验，**不得据此生成计划**。
+
+计划文件可接受带 BOM 或无 BOM 的 UTF-8；`validate-plan --file` 已兼容两种形式。若通过 PowerShell 5.1 写入计划，仍建议使用 PowerShell 7 的 `-Encoding utf8NoBOM`，或使用脚本直接生成无 BOM 文件。
+
+Windows 上若 shell 工具不可用（例如 PortableGit 报 `dirname`、`ls` 或 `head: command not found`），改用 PowerShell 工具，不要依赖 bash。中转文件一律放在工作区或系统临时目录，不得写进被整理的仓库。

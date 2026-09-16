@@ -241,7 +241,9 @@ def invoke_bridge(config: dict[str, Any], request: dict[str, Any], browser: str,
 
 
 def read_plan(path: str) -> list[dict[str, str]]:
-    raw = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
+    raw = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8-sig")
+    # 通过管道传入时也兼容 PowerShell 5.1 可能保留的 UTF-8 BOM。
+    raw = raw.lstrip("\ufeff")
     try:
         plan = json.loads(raw)
     except json.JSONDecodeError as error:
@@ -277,6 +279,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--browser", choices=("edge", "chrome", "brave"))
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--pretty", action="store_true", help="以缩进 JSON 输出")
+    parser.add_argument("--output", type=Path, help="将结果直接写入无 BOM UTF-8 JSON 文件，不依赖控制台编码")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for name in ("status", "scan", "backup", "archives", "operations"):
         subparsers.add_parser(name)
@@ -291,6 +294,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def write_json_result(result: Any, path: Path, pretty: bool) -> None:
+    serialized = json.dumps(result, ensure_ascii=False, indent=2 if pretty else None) + "\n"
+    path.write_text(serialized, encoding="utf-8")
+
+
 def main() -> int:
     configure_stdio()
     args = parse_args()
@@ -298,7 +306,10 @@ def main() -> int:
         config = load_config(args.config.expanduser())
         browser = args.browser or config.get("browser") or "edge"
         result = invoke_bridge(config, build_request(args), browser, args.timeout)
-        print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
+        if args.output:
+            write_json_result(result, args.output, args.pretty)
+        else:
+            print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
         return 0
     except (OSError, RuntimeError) as error:
         print(json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False), file=sys.stderr)

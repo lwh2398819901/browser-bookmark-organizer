@@ -31,6 +31,8 @@ Agent → bookmarkctl.py → 临时 127.0.0.1 页面 → Chromium 外部消息 �
 
 日常整理只需要 `scan`、`validate-plan`、`apply-plan` 三次调用。`apply-plan` 自己会先备份，调用方不得再提前调用 `backup`。`status`、`archives` 和 `operations` 不是固定前置步骤；仅在故障诊断、用户查询或核对不确定执行结果时使用。
 
+Windows 上如果宿主工具不可靠地回传 stdout，所有只读命令都可以使用全局参数 `--output <文件>`，例如 `python scripts/bookmarkctl.py --pretty --output "$env:TEMP\\bookmark-scan.json" scan`，再读取该无 BOM UTF-8 文件。计划文件读取兼容带 BOM 和无 BOM 的 UTF-8；详见[本地执行扩展](../.agents/skills/bookmark-organizer/references/local-extension.md)中的 Windows 编码说明。
+
 ## 本地身份校验
 
 - manifest 中的公开 `key` 只用于固定解压缩扩展 ID，不是秘密。
