@@ -173,6 +173,10 @@ function send(context, request, token = 'test-secret', senderUrl = 'http://127.0
   if (!allValidation.ok || allValidation.result.moveCount !== 1 || !allValidation.result.planToken) {
     throw new Error(`Bridge full validation failed: ${JSON.stringify(allValidation)}`);
   }
+  const allApply = await send(allContext, { command: 'plan.apply', planToken: allValidation.result.planToken, confirmed: true });
+  if (!allApply.ok || allApply.result.movedCount !== 1 || allContext.findNode('12').parentId === '11') {
+    throw new Error(`Bridge full-scope apply failed: ${JSON.stringify(allApply)}`);
+  }
 
   const validation = await send(context, {
     command: 'plan.validate',

@@ -15,6 +15,7 @@ if (-not $ExtensionRoot) {
     $ExtensionRoot = if (Test-Path -LiteralPath 'D:\') { Join-Path "D:\$browserFolder" 'Local-Extensions' } else { Join-Path $env:LOCALAPPDATA "BrowserLocalExtensions\$browserFolder" }
 }
 $extensionTarget = Join-Path $ExtensionRoot 'bookmark-organizer'
+$extensionSource = Join-Path $repoRoot 'extension\edge-bookmark-organizer'
 $failed = $false
 
 function Check([bool]$Condition, [string]$Message) {
@@ -57,6 +58,24 @@ if (Test-Path -LiteralPath (Join-Path $extensionTarget 'manifest.json') -PathTyp
         $matches = @($manifest.externally_connectable.matches)
         Check (($matches -contains 'http://127.0.0.1/*') -and ($matches -contains 'http://localhost/*')) 'Local-only external message origins'
     } catch { Check $false 'Manifest JSON format' }
+}
+if ((Test-Path -LiteralPath $extensionSource -PathType Container) -and (Test-Path -LiteralPath $extensionTarget -PathType Container)) {
+    $mismatchedFiles = @()
+    foreach ($sourceFile in (Get-ChildItem -LiteralPath $extensionSource -File)) {
+        if ($sourceFile.Name -eq 'bridge-config.js') { continue }
+        $deployedFile = Join-Path $extensionTarget $sourceFile.Name
+        if (-not (Test-Path -LiteralPath $deployedFile -PathType Leaf)) {
+            $mismatchedFiles += "$($sourceFile.Name) (missing in deployed copy)"
+        } else {
+            $sourceHash = (Get-FileHash -LiteralPath $sourceFile.FullName -Algorithm SHA256).Hash
+            $deployedHash = (Get-FileHash -LiteralPath $deployedFile -Algorithm SHA256).Hash
+            if ($sourceHash -ne $deployedHash) { $mismatchedFiles += $sourceFile.Name }
+        }
+    }
+    if ($mismatchedFiles.Count -gt 0) {
+        Write-Host "  Differs from repo source: $($mismatchedFiles -join ', ')" -ForegroundColor Yellow
+    }
+    Check ($mismatchedFiles.Count -eq 0) 'Deployed extension files match repository source (excluding bridge-config.js)'
 }
 if ($python) {
     try { $auditScript = Join-Path $skillSource 'scripts\audit_bookmarks.py'; & $python.Source $auditScript --help | Out-Null; Check $true 'Audit script is runnable' }

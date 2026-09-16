@@ -241,6 +241,8 @@ def invoke_bridge(config: dict[str, Any], request: dict[str, Any], browser: str,
 
 
 def read_plan(path: str) -> list[dict[str, str]]:
+    if path == "-" and sys.stdin.isatty():
+        raise RuntimeError("校验方案缺少 --file <plan.json>：标准输入是交互终端，无法从中读取方案。")
     try:
         raw = sys.stdin.read() if path == "-" else Path(path).expanduser().read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as error:
@@ -286,17 +288,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pretty", action="store_true", help="以缩进 JSON 输出")
     parser.add_argument("--output", type=Path, help="将成功或失败结果写入无 BOM UTF-8 JSON 文件；路径中的 ~ 会展开")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    # 让 --pretty / --output 也能写在子命令之后；default=SUPPRESS 避免覆盖写在子命令之前的全局值。
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--pretty", action="store_true", default=argparse.SUPPRESS, help="以缩进 JSON 输出")
+    common.add_argument("--output", type=Path, default=argparse.SUPPRESS, help="将成功或失败结果写入无 BOM UTF-8 JSON 文件；路径中的 ~ 会展开")
     for name in ("status", "backup", "archives", "operations"):
-        subparsers.add_parser(name)
-    scan = subparsers.add_parser("scan")
+        subparsers.add_parser(name, parents=[common])
+    scan = subparsers.add_parser("scan", parents=[common])
     scan.add_argument("--scope", choices=("temporary", "all"), default="temporary")
-    validate = subparsers.add_parser("validate-plan")
+    validate = subparsers.add_parser("validate-plan", parents=[common])
     validate.add_argument("--scope", choices=("temporary", "all"), default="temporary")
     validate.add_argument("--file", default="-", help="方案 JSON 文件；- 表示标准输入")
-    apply_plan = subparsers.add_parser("apply-plan")
+    apply_plan = subparsers.add_parser("apply-plan", parents=[common])
     apply_plan.add_argument("--plan-token", required=True)
     apply_plan.add_argument("--confirmed", action="store_true")
-    undo = subparsers.add_parser("undo")
+    undo = subparsers.add_parser("undo", parents=[common])
     undo.add_argument("--operation-id")
     undo.add_argument("--confirmed", action="store_true")
     return parser.parse_args()

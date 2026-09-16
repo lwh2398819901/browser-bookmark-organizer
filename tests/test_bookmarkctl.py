@@ -41,6 +41,25 @@ class BridgePageTests(unittest.TestCase):
                 {"command": "plan.validate", "scope": "all", "plan": [{"id": "1", "folderPath": "收藏夹栏/开发"}]},
             )
 
+    def test_parse_args_accepts_output_after_subcommand(self):
+        with patch.object(sys, "argv", ["bookmarkctl.py", "scan", "--scope", "all", "--output", "out.json", "--pretty"]):
+            ns = bookmarkctl.parse_args()
+        self.assertEqual(ns.scope, "all")
+        self.assertEqual(str(ns.output), "out.json")
+        self.assertTrue(ns.pretty)
+
+    def test_parse_args_keeps_global_flags_before_subcommand(self):
+        with patch.object(sys, "argv", ["bookmarkctl.py", "--pretty", "scan", "--scope", "all"]):
+            ns = bookmarkctl.parse_args()
+        self.assertTrue(ns.pretty)
+        self.assertIsNone(ns.output)
+        self.assertEqual(ns.scope, "all")
+
+    def test_read_plan_rejects_interactive_stdin_without_file(self):
+        with patch.object(sys.stdin, "isatty", return_value=True):
+            with self.assertRaises(RuntimeError):
+                bookmarkctl.read_plan("-")
+
     def test_write_json_result_is_utf8_without_bom(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "result.json"
