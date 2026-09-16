@@ -30,7 +30,7 @@ python scripts/bookmarkctl.py --pretty scan
 
 全库实时整理必须显式指定范围：`python scripts/bookmarkctl.py --pretty scan --scope all`。
 
-命令返回实时 ID、全库精确重复路径和已有目录。根据这些数据生成 `[{"id":"...","folderPath":"..."}]`；只阅读标题和 URL 不足以判断的网页。目标路径必须以收藏夹栏开头（例如 `收藏夹栏/开发/Git`），扩展不会移动或创建收藏夹栏之外的位置。把方案写入临时 JSON 数据文件后校验：
+命令返回实时 ID、全库精确重复路径和已有目录。响应里的 `bookmarks` 是本次范围内的全部书签（`temporary` 即临时收藏，`all` 为整个收藏夹），`temporaryBookmarks` 始终只是临时收藏那几条；生成方案时以 `bookmarks` 为准，不要只读 `temporaryBookmarks`。`all` 模式下 `duplicateCount` 与 `existingFolders` 也按全库范围计算。根据这些数据生成 `[{"id":"...","folderPath":"..."}]`；只阅读标题和 URL 不足以判断的网页。目标路径必须以收藏夹栏开头（例如 `收藏夹栏/开发/Git`），扩展不会移动或创建收藏夹栏之外的位置。把方案写入临时 JSON 数据文件后校验：
 
 ```text
 python scripts/bookmarkctl.py --pretty validate-plan --file <plan.json>
