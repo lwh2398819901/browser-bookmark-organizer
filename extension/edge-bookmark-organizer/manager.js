@@ -2,8 +2,7 @@
   'use strict';
 
   const core = globalThis.BookmarkOrganizerCore;
-  const historyKey = 'bookmarkOrganizerOperations';
-  const maxHistory = 20;
+  const operationStore = core.createOperationStore('bookmarkOrganizerOperations', 20);
   let scan = null;
   let validatedPlan = null;
   let validatedPlanSignature = null;
@@ -50,40 +49,13 @@
     node.className = `message${kind ? ` ${kind}` : ''}`;
   }
 
-  function normalizePath(path) {
-    return String(path || '').split('/').map(part => part.trim()).filter(Boolean);
-  }
-
-  function planSignature(plan) {
-    return JSON.stringify(plan.map(item => ({ id: item.id, folderPath: item.folderPath })));
-  }
-
-  function temporaryBookmarks(folder, folderPath) {
-    const found = [];
-    if (!folder) return found;
-    core.walk(folder, folderPath.slice(0, -1), (node, path) => {
-      if (node.url) {
-        found.push({
-          id: node.id,
-          parentId: node.parentId,
-          index: node.index,
-          title: node.title,
-          url: node.url,
-          canonical: core.canonicalUrl(node.url),
-          path
-        });
-      }
-    });
-    return found;
-  }
-
   async function scanBookmarks() {
     const roots = await chrome.bookmarks.getTree();
     const collected = core.collectBookmarks(roots);
     const temporary = core.findTemporaryFolder(roots);
     if (!temporary) throw new Error(`未找到“${core.temporaryFolderName}”文件夹。请先通过工具栏加入一个临时收藏。`);
     const temporaryFolder = collected.folders.find(folder => folder.id === temporary.id);
-    const temporaryUrls = temporaryBookmarks(temporary, temporaryFolder?.path || [core.temporaryFolderName]);
+    const temporaryUrls = core.temporaryBookmarks(temporary, temporaryFolder?.path || [core.temporaryFolderName]);
     const duplicateMap = new Map();
     for (const bookmark of collected.bookmarks) {
       const group = duplicateMap.get(bookmark.canonical) || [];
@@ -154,7 +126,7 @@
     const temporaryFolder = collected.folders.find(folder => folder.id === temporary?.id);
     bookmarkCount.textContent = String(collected.bookmarks.length);
     folderCount.textContent = String(collected.folders.length);
-    temporaryCount.textContent = String(temporaryBookmarks(temporary, temporaryFolder?.path || [core.temporaryFolderName]).length);
+    temporaryCount.textContent = String(core.temporaryBookmarks(temporary, temporaryFolder?.path || [core.temporaryFolderName]).length);
   }
 
   async function refreshArchives() {
@@ -250,7 +222,7 @@
       if (!bookmark) throw new Error(`书签 ${item.id} 不在当前“临时收藏”中。`);
       if (seen.has(item.id)) throw new Error(`书签 ${item.id} 重复出现在方案中。`);
       seen.add(item.id);
-      const path = normalizePath(item.folderPath);
+      const path = core.normalizePath(item.folderPath);
       const actualRoot = scan.bookmarkBar?.title;
       if (!actualRoot) throw new Error('没有找到浏览器的收藏夹栏根目录。');
       const acceptedRoots = new Set([actualRoot, 'bookmarks_bar', '收藏夹栏', '书签栏', 'Bookmarks bar', 'Favorites bar'].filter(Boolean));
@@ -262,26 +234,20 @@
         folderPath: path,
         title: bookmark.title,
         url: bookmark.url,
+        fromParentId: bookmark.parentId,
+        fromIndex: bookmark.index,
         fromPath: bookmark.path.slice(0, -1)
       };
     });
   }
 
   function missingFolderPaths(plan) {
-    const existing = new Set(scan.folders.map(folder => folder.path.join('/')));
-    const missing = new Set();
-    for (const item of plan) {
-      for (let length = 2; length <= item.folderPath.length; length += 1) {
-        const path = item.folderPath.slice(0, length).join('/');
-        if (!existing.has(path)) missing.add(path);
-      }
-    }
-    return [...missing];
+    return core.missingFolderPaths(scan.folders.map(folder => folder.path.join('/')), plan);
   }
 
   function renderPlan(plan) {
     validatedPlan = plan;
-    validatedPlanSignature = planSignature(plan);
+    validatedPlanSignature = core.planSignature(plan);
     planPreview.replaceChildren();
     const missing = missingFolderPaths(plan);
     planSummary.className = 'plan-summary';
@@ -331,28 +297,13 @@
     return { id: parentId, created };
   }
 
-  async function loadOperations() {
-    const stored = await chrome.storage.local.get({ [historyKey]: [] });
-    return Array.isArray(stored[historyKey]) ? stored[historyKey] : [];
-  }
-
-  async function saveOperations(operations) {
-    await chrome.storage.local.set({ [historyKey]: operations.slice(0, maxHistory) });
-  }
-
-  async function addOperation(operation) {
-    const operations = await loadOperations();
-    operations.unshift(operation);
-    await saveOperations(operations);
-  }
-
   function operationId() {
     return globalThis.crypto?.randomUUID?.() || `operation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
 
   async function renderHistory() {
     historyList.replaceChildren(createElement('p', 'empty', '正在读取操作记录…'));
-    const operations = await loadOperations();
+    const operations = await operationStore.load();
     historyList.replaceChildren();
     if (!operations.length) {
       historyList.append(createElement('p', 'empty', '尚无插件执行的整理记录。'));
@@ -382,7 +333,7 @@
     button.disabled = true;
     setMessage(result, '正在备份当前状态并撤销…');
     try {
-      const operations = await loadOperations();
+      const operations = await operationStore.load();
       const operation = operations.find(item => item.id === id);
       if (!operation || operation.undoneAt) throw new Error('这条操作记录不存在或已经撤销。');
       const undoArchive = await core.archiveCurrentBookmarks();
@@ -410,7 +361,7 @@
       }
       operation.undoneAt = new Date().toISOString();
       operation.undoArchivePath = undoArchive.filename;
-      await saveOperations(operations);
+      await operationStore.save(operations);
       const skippedNote = skipped ? `；${skipped} 条书签已被删除，无法放回` : '';
       setMessage(result, `撤销完成：${restored} 条书签已移回原目录${skippedNote}。撤销前备份：${undoArchive.filename}`, 'success');
       await Promise.all([renderHistory(), refreshOverview()]);
@@ -519,7 +470,7 @@
       setMessage(result, '正在重新扫描并校验方案…');
       scan = await scanBookmarks();
       const currentPlan = validatePlan(planToApply.map(item => ({ id: item.id, folderPath: item.folderPath.join('/') })));
-      if (planSignature(currentPlan) !== validatedPlanSignature) throw new Error('收藏夹状态或方案已经改变，请重新预览。');
+      if (core.planSignature(currentPlan) !== validatedPlanSignature) throw new Error('收藏夹状态或方案已经改变，请重新预览。');
       setMessage(result, '正在备份当前全部收藏夹…');
       archive = await core.archiveCurrentBookmarks();
       const cleanup = await core.trimArchives();
@@ -546,7 +497,7 @@
           toPath: item.folderPath
         });
       }
-      await addOperation({
+      await operationStore.add({
         id: operationId(),
         createdAt: new Date().toISOString(),
         status: 'complete',
@@ -561,7 +512,7 @@
       await Promise.all([refreshOverview(), refreshArchives(), renderHistory()]);
     } catch (error) {
       if (moved.length && archive && !operationSaved) {
-        await addOperation({
+        await operationStore.add({
           id: operationId(),
           createdAt: new Date().toISOString(),
           status: 'partial',
@@ -581,12 +532,12 @@
   refreshHistoryButton.addEventListener('click', renderHistory);
 
   clearHistoryButton.addEventListener('click', async () => {
-    const operations = await loadOperations();
+    const operations = await operationStore.load();
     if (!operations.length) {
       setMessage(result, '当前没有可清除的操作记录。');
       return;
     }
-    await saveOperations([]);
+    await operationStore.save([]);
     await renderHistory();
     setMessage(result, '操作记录已清空；收藏夹和备份文件没有改变。', 'success');
   });

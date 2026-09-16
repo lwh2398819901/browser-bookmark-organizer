@@ -5,47 +5,12 @@ importScripts('shared.js', 'bridge-config.js');
 
   const core = globalThis.BookmarkOrganizerCore;
   const bridgeConfig = globalThis.BookmarkOrganizerBridgeConfig || {};
-  const historyKey = 'bookmarkOrganizerOperations';
   const pendingPlanKey = 'bookmarkOrganizerPendingPlan';
-  const maxHistory = 20;
   const planLifetimeMs = 10 * 60 * 1000;
+  const operationStore = core.createOperationStore('bookmarkOrganizerOperations', 20);
 
   function id() {
     return globalThis.crypto?.randomUUID?.() || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  }
-
-  function normalizePath(path) {
-    return String(path || '').split('/').map(part => part.trim()).filter(Boolean);
-  }
-
-  function planSignature(plan) {
-    return JSON.stringify(plan.map(item => ({
-      id: item.id,
-      folderPath: item.folderPath,
-      title: item.title,
-      url: item.url,
-      fromParentId: item.fromParentId,
-      fromIndex: item.fromIndex,
-      fromPath: item.fromPath
-    })));
-  }
-
-  function temporaryBookmarks(folder, folderPath) {
-    const found = [];
-    if (!folder) return found;
-    core.walk(folder, folderPath.slice(0, -1), (node, path) => {
-      if (!node.url) return;
-      found.push({
-        id: node.id,
-        parentId: node.parentId,
-        index: node.index,
-        title: node.title,
-        url: node.url,
-        canonical: core.canonicalUrl(node.url),
-        path
-      });
-    });
-    return found;
   }
 
   async function scanBookmarks() {
@@ -54,7 +19,7 @@ importScripts('shared.js', 'bridge-config.js');
     const temporary = core.findTemporaryFolder(roots);
     if (!temporary) throw new Error(`未找到“${core.temporaryFolderName}”文件夹。请先收藏一个网页。`);
     const temporaryFolder = collected.folders.find(folder => folder.id === temporary.id);
-    const temporaryUrls = temporaryBookmarks(temporary, temporaryFolder?.path || [core.temporaryFolderName]);
+    const temporaryUrls = core.temporaryBookmarks(temporary, temporaryFolder?.path || [core.temporaryFolderName]);
     const duplicateMap = new Map();
     for (const bookmark of collected.bookmarks) {
       const group = duplicateMap.get(bookmark.canonical) || [];
@@ -107,7 +72,7 @@ importScripts('shared.js', 'bridge-config.js');
       extensionVersion: chrome.runtime.getManifest().version,
       bookmarkBar: core.findBookmarkBar(roots)?.title || 'bookmarks_bar',
       stats: { bookmarks: collected.bookmarks.length, folders: collected.folders.length },
-      temporaryCount: temporaryBookmarks(temporary, temporaryFolder?.path || [core.temporaryFolderName]).length
+      temporaryCount: core.temporaryBookmarks(temporary, temporaryFolder?.path || [core.temporaryFolderName]).length
     };
   }
 
@@ -123,7 +88,7 @@ importScripts('shared.js', 'bridge-config.js');
       if (!bookmark) throw new Error(`书签 ${item.id} 不在当前“临时收藏”中。`);
       if (seen.has(item.id)) throw new Error(`书签 ${item.id} 重复出现在方案中。`);
       seen.add(item.id);
-      const path = normalizePath(item.folderPath);
+      const path = core.normalizePath(item.folderPath);
       const actualRoot = scan.bookmarkBar?.title;
       if (!actualRoot) throw new Error('没有找到浏览器的收藏夹栏根目录。');
       const acceptedRoots = new Set([actualRoot, 'bookmarks_bar', '收藏夹栏', '书签栏', 'Bookmarks bar', 'Favorites bar']);
@@ -142,18 +107,6 @@ importScripts('shared.js', 'bridge-config.js');
     });
   }
 
-  function missingFolderPaths(scan, plan) {
-    const existing = new Set(scan.folders.map(folder => folder.path.join('/')));
-    const missing = new Set();
-    for (const item of plan) {
-      for (let length = 2; length <= item.folderPath.length; length += 1) {
-        const path = item.folderPath.slice(0, length).join('/');
-        if (!existing.has(path)) missing.add(path);
-      }
-    }
-    return [...missing];
-  }
-
   async function ensureFolder(path) {
     const roots = await chrome.bookmarks.getTree();
     const bar = core.findBookmarkBar(roots);
@@ -166,21 +119,6 @@ importScripts('shared.js', 'bridge-config.js');
       parentId = folder.id;
     }
     return parentId;
-  }
-
-  async function loadOperations() {
-    const stored = await chrome.storage.local.get({ [historyKey]: [] });
-    return Array.isArray(stored[historyKey]) ? stored[historyKey] : [];
-  }
-
-  async function saveOperations(operations) {
-    await chrome.storage.local.set({ [historyKey]: operations.slice(0, maxHistory) });
-  }
-
-  async function addOperation(operation) {
-    const operations = await loadOperations();
-    operations.unshift(operation);
-    await saveOperations(operations);
   }
 
   async function createBackup() {
@@ -206,7 +144,7 @@ importScripts('shared.js', 'bridge-config.js');
       token: planToken,
       createdAt: new Date().toISOString(),
       expiresAt: Date.now() + planLifetimeMs,
-      signature: planSignature(plan),
+      signature: core.planSignature(plan),
       plan: plan.map(item => ({ id: item.id, folderPath: item.folderPath.join('/') }))
     };
     await chrome.storage.local.set({ [pendingPlanKey]: pending });
@@ -214,7 +152,7 @@ importScripts('shared.js', 'bridge-config.js');
       planToken,
       expiresAt: new Date(pending.expiresAt).toISOString(),
       moveCount: plan.length,
-      missingFolders: missingFolderPaths(scan, plan),
+      missingFolders: core.missingFolderPaths(scan.folders.map(folder => folder.path.join('/')), plan),
       preview: plan.map(item => ({
         id: item.id,
         title: item.title,
@@ -232,7 +170,7 @@ importScripts('shared.js', 'bridge-config.js');
     if (Date.now() > pending.expiresAt) throw new Error('整理方案已过期，请重新扫描并校验。');
     const scan = await scanBookmarks();
     const currentPlan = validatePlan(scan, pending.plan);
-    if (planSignature(currentPlan) !== pending.signature) throw new Error('收藏夹状态已经改变，请重新扫描并校验。');
+    if (core.planSignature(currentPlan) !== pending.signature) throw new Error('收藏夹状态已经改变，请重新扫描并校验。');
 
     const backup = await createBackup();
     const moved = [];
@@ -265,13 +203,13 @@ importScripts('shared.js', 'bridge-config.js');
         archivePath: backup.filename,
         moves: moved
       };
-      await addOperation(operation);
+      await operationStore.add(operation);
       operationSaved = true;
       await chrome.storage.local.remove(pendingPlanKey);
       return { operationId: operation.id, movedCount: moved.length, backup };
     } catch (error) {
       if (moved.length && !operationSaved) {
-        await addOperation({
+        await operationStore.add({
           id: id(), createdAt: new Date().toISOString(), status: 'partial',
           archivePath: backup.filename, moves: moved
         });
@@ -281,7 +219,7 @@ importScripts('shared.js', 'bridge-config.js');
   }
 
   async function undo(operationId) {
-    const operations = await loadOperations();
+    const operations = await operationStore.load();
     const operation = operationId
       ? operations.find(item => item.id === operationId)
       : operations.find(item => !item.undoneAt && item.moves?.length);
@@ -302,7 +240,7 @@ importScripts('shared.js', 'bridge-config.js');
     }
     operation.undoneAt = new Date().toISOString();
     operation.undoArchivePath = backup.filename;
-    await saveOperations(operations);
+    await operationStore.save(operations);
     return { operationId: operation.id, restoredCount: restored, skippedCount: skipped, backup };
   }
 
@@ -320,7 +258,7 @@ importScripts('shared.js', 'bridge-config.js');
       if (request.confirmed !== true) throw new Error('扩展拒绝执行：缺少对当前预览的明确确认。');
       return applyStoredPlan(request.planToken);
     }
-    if (command === 'operations.list') return { operations: await loadOperations() };
+    if (command === 'operations.list') return { operations: await operationStore.load() };
     if (command === 'operations.undo') {
       if (request.confirmed !== true) throw new Error('扩展拒绝撤销：缺少明确确认。');
       return undo(request.operationId);

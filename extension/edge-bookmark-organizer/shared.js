@@ -51,6 +51,52 @@
     }
   }
 
+  function normalizePath(path) {
+    return String(path || '').split('/').map(part => part.trim()).filter(Boolean);
+  }
+
+  function planSignature(plan) {
+    return JSON.stringify(plan.map(item => ({
+      id: item.id,
+      folderPath: item.folderPath,
+      title: item.title,
+      url: item.url,
+      fromParentId: item.fromParentId,
+      fromIndex: item.fromIndex,
+      fromPath: item.fromPath
+    })));
+  }
+
+  function temporaryBookmarks(folder, folderPath) {
+    const found = [];
+    if (!folder) return found;
+    walk(folder, folderPath.slice(0, -1), (node, path) => {
+      if (!node.url) return;
+      found.push({
+        id: node.id,
+        parentId: node.parentId,
+        index: node.index,
+        title: node.title,
+        url: node.url,
+        canonical: canonicalUrl(node.url),
+        path
+      });
+    });
+    return found;
+  }
+
+  function missingFolderPaths(existingPaths, plan) {
+    const existing = new Set(existingPaths);
+    const missing = new Set();
+    for (const item of plan) {
+      for (let length = 2; length <= item.folderPath.length; length += 1) {
+        const path = item.folderPath.slice(0, length).join('/');
+        if (!existing.has(path)) missing.add(path);
+      }
+    }
+    return [...missing];
+  }
+
   function walk(node, ancestors, visit) {
     const path = node.title ? [...ancestors, node.title] : ancestors;
     visit(node, path);
@@ -313,6 +359,25 @@
     }
   }
 
+  function createOperationStore(storageKey, maxHistory) {
+    async function load() {
+      const stored = await chrome.storage.local.get({ [storageKey]: [] });
+      return Array.isArray(stored[storageKey]) ? stored[storageKey] : [];
+    }
+
+    async function save(operations) {
+      await chrome.storage.local.set({ [storageKey]: operations.slice(0, maxHistory) });
+    }
+
+    async function add(operation) {
+      const operations = await load();
+      operations.unshift(operation);
+      await save(operations);
+    }
+
+    return { load, save, add };
+  }
+
   global.BookmarkOrganizerCore = {
     temporaryFolderName,
     archiveDirectory,
@@ -320,6 +385,10 @@
     maxArchives,
     normalizedQuery,
     canonicalUrl,
+    normalizePath,
+    planSignature,
+    temporaryBookmarks,
+    missingFolderPaths,
     walk,
     collectBookmarks,
     findBookmarkBar,
@@ -333,6 +402,7 @@
     archiveCleanupMessage,
     formatDate,
     formatBytes,
-    bookmarkExists
+    bookmarkExists,
+    createOperationStore
   };
 })(globalThis);
