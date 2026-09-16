@@ -337,4 +337,17 @@ importScripts('shared.js', 'bridge-config.js');
       .catch(error => sendResponse({ ok: false, error: error?.message || String(error) }));
     return true;
   });
+
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    const ownExtension = sender?.id === chrome.runtime.id;
+    if (!ownExtension || message?.channel !== 'bookmark-organizer-popup') return false;
+    if (message?.request?.command !== 'backup') {
+      sendResponse({ ok: false, error: '工具栏只允许调用备份命令。' });
+      return false;
+    }
+    dispatch(message.request)
+      .then(result => sendResponse({ ok: true, result }))
+      .catch(error => sendResponse({ ok: false, error: error?.message || String(error) }));
+    return true;
+  });
 })();

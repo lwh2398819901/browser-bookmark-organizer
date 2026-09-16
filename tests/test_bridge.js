@@ -21,6 +21,7 @@ function makeEnvironment({ serviceWorker = false } = {}) {
   const downloads = [];
   const downloadRequests = [];
   let listener = null;
+  let internalListener = null;
   let nextId = 100;
 
   function findNode(id, node = tree[0]) {
@@ -51,8 +52,10 @@ function makeEnvironment({ serviceWorker = false } = {}) {
     btoa: value => Buffer.from(value, 'binary').toString('base64'),
     chrome: {
       runtime: {
-        getManifest: () => ({ version: '2.0.1' }),
-        onMessageExternal: { addListener(callback) { listener = callback; } }
+        id: 'test-extension-id',
+        getManifest: () => ({ version: '2.0.2' }),
+        onMessageExternal: { addListener(callback) { listener = callback; } },
+        onMessage: { addListener(callback) { internalListener = callback; } }
       },
       bookmarks: {
         getTree: async () => tree,
@@ -107,10 +110,22 @@ function makeEnvironment({ serviceWorker = false } = {}) {
     }
   };
   context.listener = () => listener;
+  context.internalListener = () => internalListener;
   context.findNode = findNode;
   context.storageData = storage;
   context.downloadRequests = downloadRequests;
   return context;
+}
+
+function sendInternal(context, request, senderId = 'test-extension-id') {
+  return new Promise(resolve => {
+    const keepAlive = context.internalListener()(
+      { channel: 'bookmark-organizer-popup', request },
+      { id: senderId },
+      resolve
+    );
+    if (keepAlive === false) setTimeout(() => resolve({ ok: false, error: 'rejected' }), 0);
+  });
 }
 
 function send(context, request, token = 'test-secret', senderUrl = 'http://127.0.0.1:32123/bridge/test') {
@@ -206,6 +221,12 @@ function send(context, request, token = 'test-secret', senderUrl = 'http://127.0
   if (!archiveHtml.includes('Git 教程') || !archiveHtml.includes('https://example.test/git')) {
     throw new Error('Service worker backup did not preserve UTF-8 bookmark content.');
   }
+  const popupBackup = await sendInternal(serviceWorkerContext, { command: 'backup' });
+  if (!popupBackup.ok) throw new Error(`Popup background backup failed: ${JSON.stringify(popupBackup)}`);
+  const forbiddenInternal = await sendInternal(serviceWorkerContext, { command: 'scan' });
+  if (forbiddenInternal.ok) throw new Error('Popup internal channel accepted a non-backup command.');
+  const foreignInternal = await sendInternal(serviceWorkerContext, { command: 'backup' }, 'foreign-extension');
+  if (foreignInternal.ok) throw new Error('Popup internal channel accepted a foreign sender.');
 
   console.log('Local Agent bridge checks passed.');
 })().catch(error => {

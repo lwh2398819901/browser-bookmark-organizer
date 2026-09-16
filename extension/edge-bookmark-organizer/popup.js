@@ -99,6 +99,7 @@
       });
       setState(pageState, '已加入“临时收藏”。', 'success');
       await refreshSummary();
+      window.close();
     } catch (error) {
       setState(pageState, `收藏失败：${error.message}`, 'error');
       addButton.disabled = false;
@@ -108,11 +109,16 @@
   backupButton.addEventListener('click', async () => {
     try {
       backupButton.disabled = true;
-      setState(backupStatus, '正在转到整理中心…');
-      await chrome.tabs.create({ url: chrome.runtime.getURL('manager.html?action=backup') });
+      setState(backupStatus, '正在备份全部收藏夹…');
+      const response = await chrome.runtime.sendMessage({
+        channel: 'bookmark-organizer-popup',
+        request: { command: 'backup' }
+      });
+      if (!response?.ok) throw new Error(response?.error || '扩展后台没有返回备份结果。');
+      setState(backupStatus, '备份完成。', 'success');
       window.close();
     } catch (error) {
-      setState(backupStatus, `无法打开整理中心：${error.message}`, 'error');
+      setState(backupStatus, `备份失败：${error.message}`, 'error');
       backupButton.disabled = false;
     }
   });

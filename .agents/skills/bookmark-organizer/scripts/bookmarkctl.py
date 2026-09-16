@@ -186,7 +186,13 @@ def invoke_bridge(config: dict[str, Any], request: dict[str, Any], browser: str,
         executable = find_browser(browser, config.get("browserExecutable"))
         url = f"http://127.0.0.1:{server.server_port}/bridge/{nonce}"
         subprocess.Popen(  # noqa: S603
-            [str(executable), f"--app={url}", "--no-first-run"],
+            [
+                str(executable),
+                f"--app={url}",
+                "--start-minimized",
+                "--window-size=420,240",
+                "--no-first-run",
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

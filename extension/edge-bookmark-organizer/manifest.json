@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "收藏夹整理助手（本地）",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "通过本地 Agent 桥接完成收藏、防重复、备份恢复和可撤销的收藏夹整理。",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs/nHR6dtAphFnNEWlVIeLwGMsSO2+R16cW/5pDYW4EoniM8yrftQ4SR5Wr7emHgy4CuX+4Gf+wK69vyfukFy9cTQiLlQ2wMeSA2QzSgmUQKIKUaurz3BKr0lSsT86+ZqYkLu1//z7LL/9vvbt3pWZ7xg3E3sm0SxwwOsYOb82qhNzbjfiA7dYqXZVbcnkoqMZECrK9ZLjEm1iUHUX6Ria9D6js81pTV0B3MWlB+LA3rvzpWeyctZVd3qjb89xz3P8Ik+D/pX01XBmGcmFb6HaRkwadvo2h608abi67wW/Ebxg5obQL+UgMKsbhJZvTSsd1O3qX5pXzZsmXVtc63vcwIDAQAB",
   "permissions": ["bookmarks", "downloads", "activeTab", "storage"],

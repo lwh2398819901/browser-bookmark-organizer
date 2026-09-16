@@ -191,8 +191,6 @@
         });
         const remove = createElement('button', 'danger-button', '删除备份');
         remove.addEventListener('click', async () => {
-          const filename = archive.filename || '这份备份';
-          if (!confirm(`确定删除这份备份吗？\n${filename}\n\n此操作不会修改收藏夹，但删除后的备份文件无法通过插件恢复。`)) return;
           remove.disabled = true;
           try {
             await chrome.downloads.removeFile(archive.id);
@@ -380,7 +378,6 @@
   }
 
   async function undoOperation(id, button) {
-    if (!confirm('确定撤销这次整理吗？扩展会先备份当前收藏夹，再把书签移回原目录。')) return;
     button.disabled = true;
     setMessage(result, '正在备份当前状态并撤销…');
     try {
@@ -583,7 +580,6 @@
       setMessage(result, '当前没有可清除的操作记录。');
       return;
     }
-    if (!confirm('确定清空全部操作记录吗？这不会删除收藏夹或备份文件，但清空后将无法再通过这些记录撤销整理。')) return;
     await saveOperations([]);
     await renderHistory();
     setMessage(result, '操作记录已清空；收藏夹和备份文件没有改变。', 'success');
@@ -591,10 +587,6 @@
 
   async function initializeManager() {
     await Promise.allSettled([refreshOverview(), refreshArchives(), renderHistory()]);
-    if (globalThis.location?.search === '?action=backup') {
-      globalThis.history?.replaceState?.({}, '', 'manager.html');
-      await runBackup();
-    }
   }
 
   initializeManager();

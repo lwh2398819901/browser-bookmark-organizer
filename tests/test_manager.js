@@ -72,7 +72,7 @@ function makeEnvironment(currentUrl = 'https://new.example.test/article') {
 
   const context = {
     console, URL, Blob, Intl, Math, setTimeout, clearTimeout,
-    confirm: () => true,
+    confirm: () => { context.confirmCalls += 1; return true; },
     window: { closed: false, close() { this.closed = true; } },
     navigator: { clipboard: { value: '', async writeText(value) { this.value = value; } } },
     document: {
@@ -81,7 +81,22 @@ function makeEnvironment(currentUrl = 'https://new.example.test/article') {
       createTextNode: text => ({ textContent: String(text) })
     },
     chrome: {
-      runtime: { id: 'new-extension-id', getURL: file => `chrome-extension://test/${file}` },
+      runtime: {
+        id: 'new-extension-id',
+        getURL: file => `chrome-extension://test/${file}`,
+        async sendMessage(message) {
+          if (message?.channel !== 'bookmark-organizer-popup' || message?.request?.command !== 'backup') {
+            return { ok: false, error: 'unsupported' };
+          }
+          try {
+            const archive = await context.BookmarkOrganizerCore.archiveCurrentBookmarks();
+            const cleanup = await context.BookmarkOrganizerCore.trimArchives();
+            return { ok: true, result: { filename: archive.filename, cleanup } };
+          } catch (error) {
+            return { ok: false, error: error.message };
+          }
+        }
+      },
       tabs: {
         created: [],
         query: async () => [{ id: 5, title: 'New page', url: currentUrl }],
@@ -148,6 +163,7 @@ function makeEnvironment(currentUrl = 'https://new.example.test/article') {
   };
   context.globalThis = context;
   context.bookmarkMoves = 0;
+  context.confirmCalls = 0;
   context.downloads = [];
   context.elements = elements;
   context.tree = tree;
@@ -208,8 +224,10 @@ async function testManager() {
   await context.elements.get('#refresh-archives').listeners.click();
   const deleteBackupButton = findButton(context.elements.get('#archive-list'), '删除备份');
   if (!deleteBackupButton) throw new Error('Delete-backup action was not rendered.');
+  const confirmationsBeforeDelete = context.confirmCalls;
   await deleteBackupButton.listeners.click();
   if (context.downloads.length !== 0) throw new Error('Deleting one backup did not remove its file record.');
+  if (context.confirmCalls !== confirmationsBeforeDelete) throw new Error('Deleting a backup unexpectedly requested confirmation.');
 
   await context.elements.get('#scan').listeners.click();
   context.elements.get('#plan').value = `方案如下：\n\`\`\`json\n${JSON.stringify([{ id: '10', folderPath: '收藏夹栏/开发' }])}\n\`\`\``;
@@ -226,6 +244,7 @@ async function testManager() {
   await context.elements.get('#clear-history').listeners.click();
   if (context.storageData.bookmarkOrganizerOperations.length !== 0) throw new Error('Clear history did not remove local operation records.');
   if (context.findNode('10').parentId !== '9') throw new Error('Clearing history changed bookmarks.');
+  if (context.confirmCalls !== 0) throw new Error('Manager used a blocking confirmation dialog.');
 }
 
 async function testPopupDuplicateGuard() {
@@ -240,9 +259,8 @@ async function testPopupDuplicateGuard() {
   if (after !== before + 1) throw new Error('Quick collect did not prevent an exact duplicate.');
   if (!context.elements.get('#page-state').textContent.includes('已经收藏')) throw new Error('Duplicate guard did not report the existing bookmark.');
   await context.elements.get('#backup').listeners.click();
-  if (!context.window.closed || !context.chrome.tabs.created.some(item => item.url.endsWith('manager.html?action=backup'))) {
-    throw new Error('Popup backup did not hand off to the manager and close the overlay.');
-  }
+  if (!context.window.closed || context.downloads.length !== 1) throw new Error('Popup backup did not finish in the background and close.');
+  if (context.chrome.tabs.created.some(item => item.url.endsWith('manager.html?action=backup'))) throw new Error('Popup backup opened an unnecessary manager tab.');
 }
 
 async function testUndoRestoresOriginalOrder() {
