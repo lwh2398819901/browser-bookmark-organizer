@@ -1,9 +1,10 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Edge', 'Chrome')]
+    [ValidateSet('Edge', 'Chrome', 'Brave')]
     [string]$Browser = 'Edge',
     [string]$ExtensionRoot,
     [switch]$UpdateExtension,
+    [switch]$UpdateSkill,
     [switch]$OpenExtensionsPage
 )
 
@@ -29,13 +30,14 @@ $installScript = Join-Path $PSScriptRoot 'install.py'
 $installArgs = @($installScript, '--browser', $Browser.ToLowerInvariant())
 if ($ExtensionRoot) { $installArgs += @('--extension-root', $ExtensionRoot) }
 if ($UpdateExtension) { $installArgs += '--update-extension' }
+if ($UpdateSkill) { $installArgs += '--update-skill' }
 & $python.Source @installArgs
 if ($LASTEXITCODE -ne 0) { throw 'Cross-platform installer failed.' }
 Write-Status 'Skill, extension and local Agent bridge installation completed.'
 
 if ($OpenExtensionsPage) {
-    $extensionsUrl = if ($Browser -eq 'Edge') { 'edge://extensions/' } else { 'chrome://extensions/' }
-    $browserCommand = if ($Browser -eq 'Edge') { 'msedge.exe' } else { 'chrome.exe' }
+    $extensionsUrl = switch ($Browser) { 'Edge' { 'edge://extensions/' } 'Chrome' { 'chrome://extensions/' } 'Brave' { 'brave://extensions/' } }
+    $browserCommand = switch ($Browser) { 'Edge' { 'msedge.exe' } 'Chrome' { 'chrome.exe' } 'Brave' { 'brave.exe' } }
     try {
         Start-Process -FilePath $browserCommand -ArgumentList $extensionsUrl
         Write-Status "Opened $extensionsUrl"

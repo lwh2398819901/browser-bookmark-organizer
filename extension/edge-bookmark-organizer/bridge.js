@@ -288,19 +288,22 @@ importScripts('shared.js', 'bridge-config.js');
     if (!operation || operation.undoneAt) throw new Error('没有找到可撤销的操作记录。');
     const backup = await createBackup();
     let restored = 0;
+    let skipped = 0;
     const ordered = [...operation.moves].sort((left, right) =>
       String(left.fromParentId).localeCompare(String(right.fromParentId)) || left.fromIndex - right.fromIndex
     );
     for (const move of ordered) {
-      const current = (await chrome.bookmarks.get(move.id))[0];
-      if (!current) continue;
+      if (!(await core.bookmarkExists(move.id))) {
+        skipped += 1;
+        continue;
+      }
       await chrome.bookmarks.move(move.id, { parentId: move.fromParentId, index: move.fromIndex });
       restored += 1;
     }
     operation.undoneAt = new Date().toISOString();
     operation.undoArchivePath = backup.filename;
     await saveOperations(operations);
-    return { operationId: operation.id, restoredCount: restored, backup };
+    return { operationId: operation.id, restoredCount: restored, skippedCount: skipped, backup };
   }
 
   async function dispatch(request) {

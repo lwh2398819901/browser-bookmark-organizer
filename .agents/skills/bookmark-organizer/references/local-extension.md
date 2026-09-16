@@ -4,7 +4,7 @@
 
 ## 使用前校验
 
-优先运行仓库的 `installer/doctor.ps1`：Edge 使用 `-Browser Edge`，Chrome 使用 `-Browser Chrome`。该脚本会检查 `manifest.json` 是否同时满足：
+优先运行仓库的 `installer/doctor.ps1`：Edge 使用 `-Browser Edge`，Chrome 使用 `-Browser Chrome`，Brave 使用 `-Browser Brave`。该脚本会检查 `manifest.json` 是否同时满足：
 
 - `name` 为 `收藏夹整理助手（本地）`；
 - `manifest_version` 为 `3`；
@@ -18,8 +18,9 @@ macOS、Linux 或 Brave 优先运行仓库的 `python installer/install.py --bro
 
 ## 执行边界
 
-- Agent 默认通过 `scripts/bookmarkctl.py` 调用扩展。命令只在执行期间监听随机的 `127.0.0.1` 端口，启动默认最小化且完成即关闭的短时桥接窗口，并使用安装时生成的随机令牌验证；不接受局域网或公网连接。
+- Agent 默认通过 `scripts/bookmarkctl.py` 调用扩展。命令只在执行期间监听随机的 `127.0.0.1` 端口，打开一个完成后自动关闭的短时桥接小窗口，并使用安装时生成的随机令牌验证；不接受局域网或公网连接。
 - `scan`、`status`、`archives`、`operations` 是只读操作；`backup` 只创建文件。`apply-plan` 和 `undo` 会移动书签，必须在用户确认后带 `--confirmed` 调用。
+- 实时移动只覆盖浏览器收藏夹栏之下的区域：目标路径必须以收藏夹栏开头（例如 `收藏夹栏/开发/Git`），扩展也只在收藏夹栏下创建新目录。`其他收藏夹`、`移动设备收藏夹`里的书签不在扩展能力范围内，只能先给出清单，再由用户使用浏览器原生操作。
 - 插件页面是人工备用控制台，不再是 Agent 日常流程的交换界面。桥接不可用时先运行 `status`、检查 `~/.bookmark-organizer/bridge.json` 并重新加载扩展。
 
 - 工具栏小窗口用于把当前网页加入 `临时收藏`、阻止全库精确重复、备份和打开整理中心。不同 URL 片段代表不同章节，不得作为精确重复阻止。

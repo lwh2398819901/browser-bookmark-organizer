@@ -53,13 +53,18 @@ function makeEnvironment({ serviceWorker = false } = {}) {
     chrome: {
       runtime: {
         id: 'test-extension-id',
-        getManifest: () => ({ version: '2.0.2' }),
+        getManifest: () => ({ version: '2.0.3' }),
         onMessageExternal: { addListener(callback) { listener = callback; } },
         onMessage: { addListener(callback) { internalListener = callback; } }
       },
       bookmarks: {
         getTree: async () => tree,
-        get: async ids => (Array.isArray(ids) ? ids : [ids]).map(value => findNode(value)).filter(Boolean),
+        get: async ids => {
+          const list = Array.isArray(ids) ? ids : [ids];
+          const missing = list.filter(id => !findNode(id));
+          if (missing.length) throw new Error(`Can't find bookmark for id: ${missing.join(', ')}`);
+          return list.map(value => findNode(value));
+        },
         getChildren: async id => findNode(id)?.children || [],
         create: async options => {
           const parent = findNode(options.parentId);
@@ -227,6 +232,33 @@ function send(context, request, token = 'test-secret', senderUrl = 'http://127.0
   if (forbiddenInternal.ok) throw new Error('Popup internal channel accepted a non-backup command.');
   const foreignInternal = await sendInternal(serviceWorkerContext, { command: 'backup' }, 'foreign-extension');
   if (foreignInternal.ok) throw new Error('Popup internal channel accepted a foreign sender.');
+
+  const deletedContext = makeEnvironment();
+  deletedContext.findNode('9').children.push({
+    id: '10b', parentId: '9', index: 1, title: 'Second', url: 'https://example.test/second'
+  });
+  vm.createContext(deletedContext);
+  vm.runInContext(fs.readFileSync(extensionFile('bridge.js'), 'utf8'), deletedContext);
+  const deletedValidation = await send(deletedContext, {
+    command: 'plan.validate',
+    plan: [{ id: '10', folderPath: '收藏夹栏/开发' }, { id: '10b', folderPath: '收藏夹栏/开发' }]
+  });
+  const deletedApply = await send(deletedContext, {
+    command: 'plan.apply', planToken: deletedValidation.result.planToken, confirmed: true
+  });
+  if (!deletedApply.ok) throw new Error(`Bridge apply failed before the deletion scenario: ${JSON.stringify(deletedApply)}`);
+  const removedNode = deletedContext.findNode('10b');
+  const removedParent = deletedContext.findNode(removedNode.parentId);
+  removedParent.children.splice(removedNode.index, 1);
+  removedParent.children.forEach((child, index) => { child.index = index; });
+  const deletedUndo = await send(deletedContext, {
+    command: 'operations.undo', operationId: deletedApply.result.operationId, confirmed: true
+  });
+  if (!deletedUndo.ok) throw new Error(`Undo failed after a bookmark was deleted: ${JSON.stringify(deletedUndo)}`);
+  if (deletedUndo.result.restoredCount !== 1 || deletedUndo.result.skippedCount !== 1) {
+    throw new Error(`Undo did not report the deleted bookmark: ${JSON.stringify(deletedUndo.result)}`);
+  }
+  if (deletedContext.findNode('10').parentId !== '9') throw new Error('Undo did not restore the surviving bookmark.');
 
   console.log('Local Agent bridge checks passed.');
 })().catch(error => {

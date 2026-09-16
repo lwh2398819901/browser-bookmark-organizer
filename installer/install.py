@@ -15,6 +15,7 @@ import shutil
 import sys
 import tempfile
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -184,6 +185,52 @@ def remove_path_entry(path: Path) -> None:
         path.unlink()
 
 
+def validate_skill_bundle(directory: Path) -> None:
+    """技能副本必须包含 SKILL.md，避免把不完整的目录替换成正式副本。"""
+    if not (directory / "SKILL.md").is_file():
+        raise RuntimeError(f"技能副本缺少 SKILL.md：{directory}")
+
+
+def replace_directory(source: Path, target: Path, label: str, prepare: Callable[[Path], None]) -> str:
+    """先在同盘生成并校验完整临时副本，成功后再整体替换目标目录。
+
+    直接向已有目录合并复制会留下上一版本已经删除的文件，导致新旧文件混用；
+    替换期间先把旧目录改名为回滚副本，激活失败时自动恢复。
+    """
+    staging = Path(tempfile.mkdtemp(prefix=f".{target.name}.staging-", dir=target.parent))
+    backup: Path | None = None
+    try:
+        shutil.copytree(source, staging, dirs_exist_ok=True)
+        prepare(staging)
+
+        if path_entry_exists(target):
+            backup = target.with_name(f".{target.name}.backup-{uuid.uuid4().hex}")
+            target.rename(backup)
+
+        try:
+            staging.rename(target)
+        except OSError as install_error:
+            if backup is not None and path_entry_exists(backup) and not path_entry_exists(target):
+                try:
+                    backup.rename(target)
+                except OSError as rollback_error:
+                    raise RuntimeError(
+                        f"{label}更新失败，且旧版本自动恢复失败；旧版本仍位于：{backup}"
+                    ) from rollback_error
+            raise RuntimeError(f"{label}更新失败，已恢复原有版本。") from install_error
+
+        if backup is None:
+            return f"已安装{label}：{target}"
+        try:
+            remove_path_entry(backup)
+        except OSError:
+            return f"已更新{label}：{target}；旧版本回滚副本未能自动清理：{backup}"
+        return f"已更新{label}：{target}；目标目录已与仓库版本完全同步"
+    finally:
+        if path_entry_exists(staging):
+            remove_path_entry(staging)
+
+
 def install_skill(source: Path, target: Path, update: bool) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
     if is_directory_link(target):
@@ -197,8 +244,7 @@ def install_skill(source: Path, target: Path, update: bool) -> str:
             return f"技能位置已存在，未覆盖：{target}（需要更新时加 --update-skill）"
         if not target.is_dir():
             raise RuntimeError(f"技能目标不是目录：{target}")
-        shutil.copytree(source, target, dirs_exist_ok=True)
-        return f"已更新技能副本：{target}"
+        return replace_directory(source, target, "技能副本", validate_skill_bundle)
 
     try:
         target.symlink_to(source, target_is_directory=True)
@@ -216,40 +262,12 @@ def install_extension(source: Path, target: Path, update: bool, bridge_token: st
     if target_exists and not update:
         return f"扩展位置已存在，未覆盖：{target}（需要更新时加 --update-extension）"
 
-    staging = Path(tempfile.mkdtemp(prefix=f".{target.name}.staging-", dir=target.parent))
-    backup: Path | None = None
-    try:
-        shutil.copytree(source, staging, dirs_exist_ok=True)
+    def prepare(staged: Path) -> None:
         if bridge_token is not None:
-            write_extension_bridge_config(staging, bridge_token)
-        validate_manifest(staging)
+            write_extension_bridge_config(staged, bridge_token)
+        validate_manifest(staged)
 
-        if target_exists:
-            backup = target.with_name(f".{target.name}.backup-{uuid.uuid4().hex}")
-            target.rename(backup)
-
-        try:
-            staging.rename(target)
-        except OSError as install_error:
-            if backup is not None and path_entry_exists(backup) and not path_entry_exists(target):
-                try:
-                    backup.rename(target)
-                except OSError as rollback_error:
-                    raise RuntimeError(
-                        f"扩展更新失败，且旧版本自动恢复失败；旧版本仍位于：{backup}"
-                    ) from rollback_error
-            raise RuntimeError("扩展更新失败，已恢复原有版本。") from install_error
-
-        if backup is not None:
-            try:
-                remove_path_entry(backup)
-            except OSError:
-                return f"已更新扩展源码：{target}；旧版本回滚副本未能自动清理：{backup}"
-            return f"已更新扩展源码：{target}；目标目录已与仓库版本完全同步"
-        return f"已安装扩展源码：{target}"
-    finally:
-        if path_entry_exists(staging):
-            remove_path_entry(staging)
+    return replace_directory(source, target, "扩展源码", prepare)
 
 
 def parse_args() -> argparse.Namespace:

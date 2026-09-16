@@ -6,7 +6,7 @@
 
 ## 当前范围
 
-当前 2.0.2 只实现本地使用方案：本机 Agent 加载技能，通过短时 localhost 桥接调用本地扩展。它不需要长期开放端口，不连接远端收藏夹服务，也不建设插件内置的云端 Agent。
+当前 2.0.3 只实现本地使用方案：本机 Agent 加载技能，通过短时 localhost 桥接调用本地扩展。它不需要长期开放端口，不连接远端收藏夹服务，也不建设插件内置的云端 Agent。
 
 ## 能做什么
 
@@ -35,7 +35,7 @@ powershell -ExecutionPolicy Bypass -File .\installer\bootstrap.ps1 -Browser Edge
 
 1. 验证 Python、技能和扩展的文件完整性。
 2. 将技能链接到 `~\.agents\skills\bookmark-organizer`；若无法创建链接则复制。
-3. 将 Edge 扩展复制到 `D:\Microsoft-Edge\Local-Extensions\bookmark-organizer`；没有 D 盘时使用 `%LOCALAPPDATA%\BrowserLocalExtensions\Microsoft-Edge\bookmark-organizer`。传入 `-Browser Chrome` 时，对应目录名为 `Google-Chrome`。
+3. 将 Edge 扩展复制到 `D:\Microsoft-Edge\Local-Extensions\bookmark-organizer`；没有 D 盘时使用 `%LOCALAPPDATA%\BrowserLocalExtensions\Microsoft-Edge\bookmark-organizer`。传入 `-Browser Chrome` 或 `-Browser Brave` 时，对应目录名分别为 `Google-Chrome` 和 `Brave`。
 4. 生成仅保存在本机的随机桥接令牌，并输出下一步的人为确认操作。
 5. 可打开 `edge://extensions`。
 
@@ -51,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File .\installer\bootstrap.ps1 -Browser Edge
 
 ## Agent 自动操作
 
-安装并重新加载扩展后，Agent 使用技能目录中的 `scripts/bookmarkctl.py`。命令执行时会启动一个默认最小化的短时本地桥接窗口，完成后自动关闭；用户不需要在插件页面扫描、复制或粘贴。
+安装并重新加载扩展后，Agent 使用技能目录中的 `scripts/bookmarkctl.py`。命令执行时会短暂出现一个约 420×240 的桥接小窗口，完成后自动关闭；用户不需要在插件页面扫描、复制或粘贴。
 
 ```powershell
 # 检查连接
@@ -128,6 +128,7 @@ python .\.agents\skills\bookmark-organizer\scripts\audit_bookmarks.py `
 ```powershell
 .\installer\doctor.ps1 -Browser Edge
 # 使用 Chrome 时：.\installer\doctor.ps1 -Browser Chrome
+# 使用 Brave 时：.\installer\doctor.ps1 -Browser Brave
 ```
 
 自检会核验扩展名称、Manifest V3、最低版本 `2.0.1`、固定扩展 ID、localhost 来源、本地桥接后台，以及 CLI 与扩展两侧令牌是否一致；同时检查 `bookmarks`、`downloads`、`activeTab`、`storage` 四项必要权限。自检不会输出令牌。
@@ -139,7 +140,7 @@ python -m unittest discover -s .\tests -p "test_*.py"
 node .\tests\test_manager.js
 ```
 
-- 更新仓库后，如需覆盖扩展源码，显式运行 `bootstrap.ps1 -Browser Edge -UpdateExtension`，然后在 Edge 扩展页点击“重新加载”。
+- 更新仓库后，如需覆盖扩展源码，显式运行 `bootstrap.ps1 -Browser Edge -UpdateExtension`；如需覆盖按副本安装的技能，再加上 `-UpdateSkill`。两者都会先在同盘生成完整临时副本校验通过后再整体替换，然后请在 Edge 扩展页点击“重新加载”。
 - 如果全局技能已存在，安装脚本不会覆盖它；这是为了保护你本机的定制。可以先比较差异后再手动迁移。
 - 不要将真实 `Bookmarks`、HTML 导出、审计结果或深度画像提交到 Git；`.gitignore` 已覆盖常见情况。
 

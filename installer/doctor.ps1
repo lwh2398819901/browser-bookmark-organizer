@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Edge', 'Chrome')]
+    [ValidateSet('Edge', 'Chrome', 'Brave')]
     [string]$Browser = 'Edge',
     [string]$ExtensionRoot
 )
@@ -10,7 +10,7 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $skillSource = Join-Path $repoRoot '.agents\skills\bookmark-organizer'
 $python = Get-Command python -ErrorAction SilentlyContinue
 $sharedSkill = Join-Path (Join-Path $env:USERPROFILE '.agents\skills') 'bookmark-organizer'
-$browserFolder = if ($Browser -eq 'Edge') { 'Microsoft-Edge' } else { 'Google-Chrome' }
+$browserFolder = switch ($Browser) { 'Edge' { 'Microsoft-Edge' } 'Chrome' { 'Google-Chrome' } 'Brave' { 'Brave' } }
 if (-not $ExtensionRoot) {
     $ExtensionRoot = if (Test-Path -LiteralPath 'D:\') { Join-Path "D:\$browserFolder" 'Local-Extensions' } else { Join-Path $env:LOCALAPPDATA "BrowserLocalExtensions\$browserFolder" }
 }

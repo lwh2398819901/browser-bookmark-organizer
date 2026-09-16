@@ -106,10 +106,26 @@ def find_browser(browser: str, configured: str | None = None) -> Path:
     raise RuntimeError(f"没有找到 {browser} 浏览器。可在 {DEFAULT_CONFIG} 中设置 browserExecutable。")
 
 
+def javascript_literal(value: Any) -> str:
+    """渲染成可安全内联进 <script> 的 JSON 字面量。
+
+    ``json.dumps`` 不会转义 ``</script>``，直接内联会让书签名或目录名提前闭合脚本标签；
+    该页面同时持有本地令牌，因此必须转义 HTML 敏感字符与 JS 行分隔符。
+    """
+    return (
+        json.dumps(value, ensure_ascii=False)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
 def bridge_html(extension_id: str, token: str, request: dict[str, Any], nonce: str) -> bytes:
-    extension_literal = json.dumps(extension_id)
-    message_literal = json.dumps({"token": token, "request": request}, ensure_ascii=False)
-    nonce_literal = json.dumps(nonce)
+    extension_literal = javascript_literal(extension_id)
+    message_literal = javascript_literal({"token": token, "request": request})
+    nonce_literal = javascript_literal(nonce)
     document = f"""<!doctype html>
 <meta charset="utf-8">
 <title>收藏夹本地桥接</title>
@@ -139,11 +155,8 @@ if (!globalThis.chrome?.runtime?.sendMessage) {{
     return document.encode("utf-8")
 
 
-def invoke_bridge(config: dict[str, Any], request: dict[str, Any], browser: str, timeout: float) -> Any:
-    nonce = uuid.uuid4().hex
-    state: dict[str, Any] = {"response": None}
-    completed = threading.Event()
-    page = bridge_html(config["extensionId"], config["token"], request, nonce)
+def bridge_handler(page: bytes, nonce: str, state: dict[str, Any], completed: threading.Event):
+    """构造桥接页与结果接收端点。独立成函数是为了让失效路径可被回归测试覆盖。"""
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -174,22 +187,37 @@ def invoke_bridge(config: dict[str, Any], request: dict[str, Any], browser: str,
                 self.end_headers()
                 self.wfile.write(body)
             except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
-                self.send_error(400, html.escape(str(error)))
+                # 必须立刻唤醒等待者，否则命令会空等满超时并报告成“连接超时”。
+                state["response"] = {"ok": False, "error": f"扩展响应无法解析：{error}"}
+                completed.set()
+                # 状态行只能放 latin-1 字符，中文说明必须走 explain（响应正文），否则会抛
+                # UnicodeEncodeError 并直接断开连接，客户端拿不到任何响应。
+                self.send_error(400, "Bad Request", html.escape(str(error)))
 
         def log_message(self, _format: str, *_args: Any) -> None:
             return
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    return Handler
+
+
+def invoke_bridge(config: dict[str, Any], request: dict[str, Any], browser: str, timeout: float) -> Any:
+    nonce = uuid.uuid4().hex
+    state: dict[str, Any] = {"response": None}
+    completed = threading.Event()
+    page = bridge_html(config["extensionId"], config["token"], request, nonce)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), bridge_handler(page, nonce, state, completed))
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     try:
         executable = find_browser(browser, config.get("browserExecutable"))
         url = f"http://127.0.0.1:{server.server_port}/bridge/{nonce}"
+        # 说明：Chromium/Edge 没有可用的 --start-minimized 开关，桥接窗口只能保持小尺寸，
+        # 完成后由页面自行关闭，不要向用户承诺“默认最小化”。
         subprocess.Popen(  # noqa: S603
             [
                 str(executable),
                 f"--app={url}",
-                "--start-minimized",
                 "--window-size=420,240",
                 "--no-first-run",
             ],

@@ -29,10 +29,16 @@ class InstallerTests(unittest.TestCase):
         (directory / "bridge.js").write_text("", encoding="utf-8")
         (directory / "bridge-config.js").write_text("", encoding="utf-8")
 
+    def write_skill(self, directory: Path, extra=None) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "SKILL.md").write_text("skill", encoding="utf-8")
+        for name, content in (extra or {}).items():
+            (directory / name).write_text(content, encoding="utf-8")
+
     def test_repository_manifest_is_valid(self):
         extension = INSTALLER_PATH.parents[1] / "extension" / "edge-bookmark-organizer"
         manifest = installer.validate_manifest(extension)
-        self.assertEqual(manifest["version"], "2.0.2")
+        self.assertEqual(manifest["version"], "2.0.3")
 
     def test_version_parsing_is_strict(self):
         self.assertGreaterEqual(installer.version_tuple("2.0.1"), installer.MINIMUM_VERSION)
@@ -103,6 +109,51 @@ class InstallerTests(unittest.TestCase):
                 config = installer.load_or_create_bridge_config({"key": "YWJj"}, "edge", extension)
 
             self.assertEqual(config["token"], deployed_token)
+
+    def test_installed_skill_is_not_overwritten_without_the_update_flag(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            target = root / "target"
+            self.write_skill(source, {"current.md": "new"})
+            self.write_skill(target, {"current.md": "mine"})
+
+            message = installer.install_skill(source, target, update=False)
+
+            self.assertIn("未覆盖", message)
+            self.assertEqual((target / "current.md").read_text(encoding="utf-8"), "mine")
+
+    def test_skill_update_replaces_directory_and_removes_stale_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            target = root / "target"
+            self.write_skill(source, {"current.md": "new"})
+            self.write_skill(target, {"current.md": "old", "stale.md": "stale"})
+
+            message = installer.install_skill(source, target, update=True)
+
+            self.assertIn("完全同步", message)
+            self.assertEqual((target / "current.md").read_text(encoding="utf-8"), "new")
+            self.assertFalse((target / "stale.md").exists())
+            self.assertFalse(list(root.glob(".target.staging-*")))
+            self.assertFalse(list(root.glob(".target.backup-*")))
+
+    def test_skill_update_keeps_previous_copy_when_bundle_is_invalid(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir()
+            (source / "current.md").write_text("new", encoding="utf-8")
+            self.write_skill(target, {"current.md": "keep"})
+
+            with self.assertRaisesRegex(RuntimeError, "技能副本缺少 SKILL.md"):
+                installer.install_skill(source, target, update=True)
+
+            self.assertEqual((target / "current.md").read_text(encoding="utf-8"), "keep")
+            self.assertFalse(list(root.glob(".target.staging-*")))
+            self.assertFalse(list(root.glob(".target.backup-*")))
 
     def test_extension_update_rejects_a_file_target(self):
         with tempfile.TemporaryDirectory() as temporary:

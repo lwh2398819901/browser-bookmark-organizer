@@ -36,6 +36,7 @@
   const refreshHistoryButton = document.querySelector('#refresh-history');
   const clearHistoryButton = document.querySelector('#clear-history');
   const historyList = document.querySelector('#history-list');
+  const versionBadge = document.querySelector('.version');
 
   function createElement(tag, className = '', text = '') {
     const node = document.createElement(tag);
@@ -393,10 +394,14 @@
         byParent.set(move.fromParentId, group);
       }
       let restored = 0;
+      let skipped = 0;
       for (const group of byParent.values()) {
         group.sort((left, right) => left.fromIndex - right.fromIndex);
         for (const move of group) {
-          await chrome.bookmarks.get(move.id);
+          if (!(await core.bookmarkExists(move.id))) {
+            skipped += 1;
+            continue;
+          }
           const destination = { parentId: move.fromParentId };
           if (Number.isInteger(move.fromIndex)) destination.index = move.fromIndex;
           await chrome.bookmarks.move(move.id, destination);
@@ -406,7 +411,8 @@
       operation.undoneAt = new Date().toISOString();
       operation.undoArchivePath = undoArchive.filename;
       await saveOperations(operations);
-      setMessage(result, `撤销完成：${restored} 条书签已移回原目录。撤销前备份：${undoArchive.filename}`, 'success');
+      const skippedNote = skipped ? `；${skipped} 条书签已被删除，无法放回` : '';
+      setMessage(result, `撤销完成：${restored} 条书签已移回原目录${skippedNote}。撤销前备份：${undoArchive.filename}`, 'success');
       await Promise.all([renderHistory(), refreshOverview()]);
     } catch (error) {
       setMessage(result, `撤销中断：${error.message}。当前状态已经在撤销前备份中保留。`, 'error');
@@ -586,6 +592,11 @@
   });
 
   async function initializeManager() {
+    if (versionBadge) {
+      try {
+        versionBadge.textContent = chrome.runtime.getManifest().version;
+      } catch { /* 读取不到时保留占位符 */ }
+    }
     await Promise.allSettled([refreshOverview(), refreshArchives(), renderHistory()]);
   }
 

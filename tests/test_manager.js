@@ -84,6 +84,7 @@ function makeEnvironment(currentUrl = 'https://new.example.test/article') {
       runtime: {
         id: 'new-extension-id',
         getURL: file => `chrome-extension://test/${file}`,
+        getManifest: () => ({ version: '2.0.3' }),
         async sendMessage(message) {
           if (message?.channel !== 'bookmark-organizer-popup' || message?.request?.command !== 'backup') {
             return { ok: false, error: 'unsupported' };
@@ -106,7 +107,9 @@ function makeEnvironment(currentUrl = 'https://new.example.test/article') {
         getTree: async () => tree,
         get: async ids => {
           const list = Array.isArray(ids) ? ids : [ids];
-          return list.map(id => findNode(id)).filter(Boolean);
+          const missing = list.filter(id => !findNode(id));
+          if (missing.length) throw new Error(`Can't find bookmark for id: ${missing.join(', ')}`);
+          return list.map(id => findNode(id));
         },
         getChildren: async id => findNode(id)?.children || [],
         create: async options => {
@@ -203,6 +206,9 @@ async function testManager() {
   await tick();
 
   const core = context.BookmarkOrganizerCore;
+  if (context.elements.get('.version').textContent !== '2.0.3') {
+    throw new Error('Version badge was not filled from the extension manifest.');
+  }
   const archiveHtml = core.bookmarksToNetscapeHtml(context.tree);
   if (!archiveHtml.includes('PERSONAL_TOOLBAR_FOLDER="true"') || !archiveHtml.includes('UNFILED_BOOKMARKS_FOLDER="true"')) throw new Error('Archive root-folder semantics are missing.');
   if (!archiveHtml.includes('ADD_DATE="10"') || !archiveHtml.includes('LAST_MODIFIED="20"') || !archiveHtml.includes('ADD_DATE="30"')) throw new Error('Archive timestamps are missing.');
@@ -303,10 +309,43 @@ async function testLocalizedBookmarkBar() {
   if (context.findNode('10').parentId !== '11') throw new Error('Localized bookmark-bar plan was not applied.');
 }
 
+async function testUndoSkipsDeletedBookmarks() {
+  const context = makeEnvironment();
+  context.findNode('9').children.push(
+    { id: '10b', parentId: '9', index: 1, title: 'Second', url: 'https://example.test/?b=2' }
+  );
+  load(context, extensionFile('shared.js'));
+  vm.runInContext(fs.readFileSync(extensionFile('manager.js'), 'utf8'), context);
+  await tick();
+  await context.elements.get('#scan').listeners.click();
+  context.elements.get('#plan').value = JSON.stringify([
+    { id: '10', folderPath: '收藏夹栏/开发' },
+    { id: '10b', folderPath: '收藏夹栏/开发' }
+  ]);
+  context.elements.get('#validate-plan').listeners.click();
+  await context.elements.get('#apply').listeners.click();
+
+  const removed = context.findNode('10b');
+  const parent = context.findNode(removed.parentId);
+  parent.children.splice(removed.index, 1);
+  parent.children.forEach((child, index) => { child.index = index; });
+
+  const undoButton = findButton(context.elements.get('#history-list'), '撤销本次整理');
+  if (!undoButton) throw new Error('Undo action was not rendered.');
+  await undoButton.listeners.click();
+  const order = (context.findNode('9').children || []).map(node => node.id).join(',');
+  if (order !== '10') throw new Error(`Undo did not restore the surviving bookmark: ${order}`);
+  const message = context.elements.get('#result').textContent;
+  if (!message.includes('撤销完成') || !message.includes('1 条书签已被删除')) {
+    throw new Error(`Undo did not report the deleted bookmark: ${message}`);
+  }
+}
+
 (async () => {
   await testManager();
   await testPopupDuplicateGuard();
   await testUndoRestoresOriginalOrder();
+  await testUndoSkipsDeletedBookmarks();
   await testLocalizedBookmarkBar();
   console.log('Extension 2.0 manager behavior checks passed.');
 })().catch(error => {

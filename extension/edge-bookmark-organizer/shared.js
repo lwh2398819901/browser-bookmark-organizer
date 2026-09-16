@@ -300,6 +300,19 @@
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
 
+  /**
+   * chrome.bookmarks.get 对不存在的 id 会报错，而不是返回空数组。
+   * 撤销和预检都需要把“书签已被用户删除”当作可跳过的正常情况处理。
+   */
+  async function bookmarkExists(id) {
+    try {
+      await chrome.bookmarks.get(id);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   global.BookmarkOrganizerCore = {
     temporaryFolderName,
     archiveDirectory,
@@ -319,6 +332,7 @@
     trimArchives,
     archiveCleanupMessage,
     formatDate,
-    formatBytes
+    formatBytes,
+    bookmarkExists
   };
 })(globalThis);
