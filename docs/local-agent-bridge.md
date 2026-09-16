@@ -17,11 +17,11 @@ Agent → bookmarkctl.py → 临时 127.0.0.1 页面 → Chromium 外部消息 �
 | 命令 | 作用 | 是否改动收藏夹 |
 |---|---|---|
 | `status` | 检查桥接、版本和收藏夹统计 | 否 |
-| `scan` | 返回临时收藏、实时 ID、重复位置和已有目录 | 否 |
+| `scan` | 默认返回临时收藏；`--scope all` 返回收藏夹栏下全部书签的实时 ID、重复位置和已有目录 | 否 |
 | `backup` | 导出完整 HTML | 否 |
 | `archives` | 列出仍存在的备份 | 否 |
 | `operations` | 列出插件操作记录 | 否 |
-| `validate-plan` | 重新扫描、校验计划并生成短时令牌 | 否 |
+| `validate-plan` | 按 scope 重新扫描、校验计划并生成短时令牌 | 否 |
 | `apply-plan --confirmed` | 先备份，再移动已校验计划 | 是 |
 | `undo --confirmed` | 先备份，再撤销指定操作 | 是 |
 
@@ -29,7 +29,7 @@ Agent → bookmarkctl.py → 临时 127.0.0.1 页面 → Chromium 外部消息 �
 
 `--confirmed` 会让 CLI 在请求中加入明确确认标记，扩展侧也会独立拒绝缺少该标记的移动和撤销请求。它用于避免程序误调用，不是对“真人身份”的密码学证明；是否获得用户授权仍由 Agent 技能和当前对话约束。
 
-日常整理只需要 `scan`、`validate-plan`、`apply-plan` 三次调用。`apply-plan` 自己会先备份，调用方不得再提前调用 `backup`。`status`、`archives` 和 `operations` 不是固定前置步骤；仅在故障诊断、用户查询或核对不确定执行结果时使用。
+日常整理只需要 `scan`、`validate-plan`、`apply-plan` 三次调用。全库整理必须显式使用 `scan --scope all` 和 `validate-plan --scope all`；`planToken` 会记录范围，`apply-plan` 以令牌中的范围为准。`apply-plan` 自己会先备份，调用方不得再提前调用 `backup`。`status`、`archives` 和 `operations` 不是固定前置步骤；仅在故障诊断、用户查询或核对不确定执行结果时使用。
 
 Windows 上如果宿主工具不可靠地回传 stdout，所有命令都可以使用全局参数 `--output <文件>`。`--output` 必须写在子命令之前，例如 `python scripts/bookmarkctl.py --pretty --output "$env:TEMP\bookmark-scan.json" scan`，再读取该无 BOM UTF-8 文件；写在子命令之后会被 argparse 拒绝。成功与失败都会写入该文件（失败为 `ok: false`）；`--output` 和 `--file` 路径中的 `~` 都会展开。计划文件必须是 UTF-8，读取兼容带 BOM 和无 BOM；详见[本地执行扩展](../.agents/skills/bookmark-organizer/references/local-extension.md)中的 Windows 编码说明。
 

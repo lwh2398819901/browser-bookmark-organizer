@@ -13,20 +13,23 @@ importScripts('shared.js', 'bridge-config.js');
     return globalThis.crypto?.randomUUID?.() || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
 
-  async function scanBookmarks() {
+  async function scanBookmarks(scope = 'temporary') {
+    if (!['temporary', 'all'].includes(scope)) throw new Error(`不支持的扫描范围：${scope}`);
     const roots = await chrome.bookmarks.getTree();
     const collected = core.collectBookmarks(roots);
     const temporary = core.findTemporaryFolder(roots);
-    if (!temporary) throw new Error(`未找到“${core.temporaryFolderName}”文件夹。请先收藏一个网页。`);
-    const temporaryFolder = collected.folders.find(folder => folder.id === temporary.id);
+    if (scope === 'temporary' && !temporary) throw new Error(`未找到“${core.temporaryFolderName}”文件夹。请先收藏一个网页。`);
+    const temporaryFolder = collected.folders.find(folder => folder.id === temporary?.id);
     const temporaryUrls = core.temporaryBookmarks(temporary, temporaryFolder?.path || [core.temporaryFolderName]);
+    const sourceBookmarks = scope === 'all' ? collected.bookmarks : temporaryUrls;
+    const temporaryIds = new Set(temporaryUrls.map(item => item.id));
     const duplicateMap = new Map();
     for (const bookmark of collected.bookmarks) {
       const group = duplicateMap.get(bookmark.canonical) || [];
       group.push(bookmark);
       duplicateMap.set(bookmark.canonical, group);
     }
-    const rows = temporaryUrls.map(bookmark => {
+    const rows = sourceBookmarks.map(bookmark => {
       const elsewhere = (duplicateMap.get(bookmark.canonical) || []).filter(item => item.id !== bookmark.id);
       return {
         id: bookmark.id,
@@ -39,9 +42,12 @@ importScripts('shared.js', 'bridge-config.js');
     });
     const bookmarkBar = core.findBookmarkBar(roots);
     return {
+      scope,
       roots,
       folders: collected.folders,
+      allBookmarks: collected.bookmarks,
       temporaryUrls,
+      temporaryRows: rows.filter(item => temporaryIds.has(item.id)),
       temporary,
       bookmarkBar,
       rows,
@@ -51,14 +57,16 @@ importScripts('shared.js', 'bridge-config.js');
 
   function publicScan(scan) {
     return {
+      scope: scan.scope,
       bookmarkBar: scan.bookmarkBar?.title || 'bookmarks_bar',
       stats: scan.stats,
-      temporaryCount: scan.rows.length,
+      temporaryCount: scan.temporaryRows.length,
       duplicateCount: scan.rows.filter(item => item.duplicateCount > 0).length,
       existingFolders: scan.folders
-        .filter(folder => folder.path[0] === scan.bookmarkBar?.title && folder.id !== scan.temporary.id)
+        .filter(folder => folder.path[0] === scan.bookmarkBar?.title && folder.id !== scan.temporary?.id)
         .map(folder => folder.path.join('/')),
-      temporaryBookmarks: scan.rows
+      bookmarks: scan.rows,
+      temporaryBookmarks: scan.temporaryRows
     };
   }
 
@@ -76,16 +84,20 @@ importScripts('shared.js', 'bridge-config.js');
     };
   }
 
-  function validatePlan(scan, rawPlan) {
+  function validatePlan(scan, rawPlan, scope = 'temporary') {
     if (!Array.isArray(rawPlan) || !rawPlan.length) throw new Error('整理方案不能为空。');
-    const temporaryById = new Map(scan.temporaryUrls.map(item => [item.id, item]));
+    if (!['temporary', 'all'].includes(scope)) throw new Error(`不支持的整理范围：${scope}`);
+    const source = scope === 'all' ? scan.allBookmarks : scan.temporaryUrls;
+    const sourceById = new Map(source.map(item => [item.id, item]));
     const seen = new Set();
     return rawPlan.map(item => {
       if (!item || typeof item.id !== 'string' || typeof item.folderPath !== 'string') {
         throw new Error('方案每项都需要字符串 id 和 folderPath。');
       }
-      const bookmark = temporaryById.get(item.id);
-      if (!bookmark) throw new Error(`书签 ${item.id} 不在当前“临时收藏”中。`);
+      const bookmark = sourceById.get(item.id);
+      if (!bookmark) throw new Error(scope === 'all'
+        ? `书签 ${item.id} 不在当前 Edge 收藏夹中。`
+        : `书签 ${item.id} 不在当前“临时收藏”中。`);
       if (seen.has(item.id)) throw new Error(`书签 ${item.id} 重复出现在方案中。`);
       seen.add(item.id);
       const path = core.normalizePath(item.folderPath);
@@ -136,14 +148,15 @@ importScripts('shared.js', 'bridge-config.js');
     }
   }
 
-  async function validateAndStore(rawPlan) {
-    const scan = await scanBookmarks();
-    const plan = validatePlan(scan, rawPlan);
+  async function validateAndStore(rawPlan, scope = 'temporary') {
+    const scan = await scanBookmarks(scope);
+    const plan = validatePlan(scan, rawPlan, scope);
     const planToken = id();
     const pending = {
       token: planToken,
       createdAt: new Date().toISOString(),
       expiresAt: Date.now() + planLifetimeMs,
+      scope,
       signature: core.planSignature(plan),
       plan: plan.map(item => ({ id: item.id, folderPath: item.folderPath.join('/') }))
     };
@@ -168,8 +181,8 @@ importScripts('shared.js', 'bridge-config.js');
     const pending = stored[pendingPlanKey];
     if (!pending || pending.token !== planToken) throw new Error('整理方案令牌无效，请重新校验方案。');
     if (Date.now() > pending.expiresAt) throw new Error('整理方案已过期，请重新扫描并校验。');
-    const scan = await scanBookmarks();
-    const currentPlan = validatePlan(scan, pending.plan);
+    const scan = await scanBookmarks(pending.scope || 'temporary');
+    const currentPlan = validatePlan(scan, pending.plan, pending.scope || 'temporary');
     if (core.planSignature(currentPlan) !== pending.signature) throw new Error('收藏夹状态已经改变，请重新扫描并校验。');
 
     const backup = await createBackup();
@@ -247,13 +260,13 @@ importScripts('shared.js', 'bridge-config.js');
   async function dispatch(request) {
     const command = request?.command;
     if (command === 'status') return status();
-    if (command === 'scan') return publicScan(await scanBookmarks());
+    if (command === 'scan') return publicScan(await scanBookmarks(request.scope || 'temporary'));
     if (command === 'backup') return createBackup();
     if (command === 'archives.list') {
       const archives = await core.listManagedArchives();
       return { archives: archives.map(item => ({ id: item.id, filename: item.filename, startTime: item.startTime, fileSize: item.fileSize })) };
     }
-    if (command === 'plan.validate') return validateAndStore(request.plan);
+    if (command === 'plan.validate') return validateAndStore(request.plan, request.scope || 'temporary');
     if (command === 'plan.apply') {
       if (request.confirmed !== true) throw new Error('扩展拒绝执行：缺少对当前预览的明确确认。');
       return applyStoredPlan(request.planToken);

@@ -28,11 +28,15 @@ description: 快速收藏、防重复、备份恢复、审计、生成画像并�
 python scripts/bookmarkctl.py --pretty scan
 ```
 
+全库实时整理必须显式指定范围：`python scripts/bookmarkctl.py --pretty scan --scope all`。
+
 命令返回实时 ID、全库精确重复路径和已有目录。根据这些数据生成 `[{"id":"...","folderPath":"..."}]`；只阅读标题和 URL 不足以判断的网页。目标路径必须以收藏夹栏开头（例如 `收藏夹栏/开发/Git`），扩展不会移动或创建收藏夹栏之外的位置。把方案写入临时 JSON 数据文件后校验：
 
 ```text
 python scripts/bookmarkctl.py --pretty validate-plan --file <plan.json>
 ```
+
+全库方案校验使用 `python scripts/bookmarkctl.py --pretty validate-plan --scope all --file <plan.json>`；`apply-plan` 以校验令牌中记录的范围为准。
 
 向用户展示返回的逐条预览。得到对当前预览的明确确认后，使用返回的短时 `planToken` 执行：
 

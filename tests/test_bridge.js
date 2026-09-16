@@ -158,6 +158,21 @@ function send(context, request, token = 'test-secret', senderUrl = 'http://127.0
   if (!scan.ok || scan.result.temporaryCount !== 1 || scan.result.temporaryBookmarks[0].id !== '10') {
     throw new Error(`Bridge scan failed: ${JSON.stringify(scan)}`);
   }
+  const allContext = makeEnvironment();
+  allContext.findNode('11').children.push({ id: '12', parentId: '11', index: 0, title: '已有项目', url: 'https://example.test/project' });
+  vm.createContext(allContext);
+  vm.runInContext(fs.readFileSync(extensionFile('bridge.js'), 'utf8'), allContext);
+  const allScan = await send(allContext, { command: 'scan', scope: 'all' });
+  if (!allScan.ok || allScan.result.scope !== 'all' || allScan.result.bookmarks.length !== 2 || allScan.result.temporaryCount !== 1) {
+    throw new Error(`Bridge full scan failed: ${JSON.stringify(allScan)}`);
+  }
+  const allValidation = await send(allContext, {
+    command: 'plan.validate', scope: 'all',
+    plan: [{ id: '12', folderPath: '收藏夹栏/开发/项目' }]
+  });
+  if (!allValidation.ok || allValidation.result.moveCount !== 1 || !allValidation.result.planToken) {
+    throw new Error(`Bridge full validation failed: ${JSON.stringify(allValidation)}`);
+  }
 
   const validation = await send(context, {
     command: 'plan.validate',

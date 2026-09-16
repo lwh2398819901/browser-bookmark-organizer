@@ -257,14 +257,16 @@ def read_plan(path: str) -> list[dict[str, str]]:
 
 
 def build_request(args: argparse.Namespace) -> dict[str, Any]:
-    if args.command in {"status", "scan", "backup"}:
+    if args.command in {"status", "backup"}:
         return {"command": args.command}
+    if args.command == "scan":
+        return {"command": "scan", "scope": args.scope}
     if args.command == "archives":
         return {"command": "archives.list"}
     if args.command == "operations":
         return {"command": "operations.list"}
     if args.command == "validate-plan":
-        return {"command": "plan.validate", "plan": read_plan(args.file)}
+        return {"command": "plan.validate", "scope": args.scope, "plan": read_plan(args.file)}
     if args.command == "apply-plan":
         if not args.confirmed:
             raise RuntimeError("执行移动前必须在用户确认预览后显式传入 --confirmed。")
@@ -284,9 +286,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pretty", action="store_true", help="以缩进 JSON 输出")
     parser.add_argument("--output", type=Path, help="将成功或失败结果写入无 BOM UTF-8 JSON 文件；路径中的 ~ 会展开")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for name in ("status", "scan", "backup", "archives", "operations"):
+    for name in ("status", "backup", "archives", "operations"):
         subparsers.add_parser(name)
+    scan = subparsers.add_parser("scan")
+    scan.add_argument("--scope", choices=("temporary", "all"), default="temporary")
     validate = subparsers.add_parser("validate-plan")
+    validate.add_argument("--scope", choices=("temporary", "all"), default="temporary")
     validate.add_argument("--file", default="-", help="方案 JSON 文件；- 表示标准输入")
     apply_plan = subparsers.add_parser("apply-plan")
     apply_plan.add_argument("--plan-token", required=True)

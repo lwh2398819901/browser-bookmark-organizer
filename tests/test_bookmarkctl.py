@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -27,6 +28,19 @@ SPEC.loader.exec_module(bookmarkctl)
 
 
 class BridgePageTests(unittest.TestCase):
+    def test_build_request_preserves_scan_scope(self):
+        self.assertEqual(
+            bookmarkctl.build_request(SimpleNamespace(command="scan", scope="all")),
+            {"command": "scan", "scope": "all"},
+        )
+
+    def test_build_request_preserves_validation_scope(self):
+        with patch.object(bookmarkctl, "read_plan", return_value=[{"id": "1", "folderPath": "收藏夹栏/开发"}]):
+            self.assertEqual(
+                bookmarkctl.build_request(SimpleNamespace(command="validate-plan", scope="all", file="plan.json")),
+                {"command": "plan.validate", "scope": "all", "plan": [{"id": "1", "folderPath": "收藏夹栏/开发"}]},
+            )
+
     def test_write_json_result_is_utf8_without_bom(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "result.json"
