@@ -1,5 +1,7 @@
 import importlib.util
+import io
 import json
+import sys
 import tempfile
 import threading
 import unittest
@@ -7,6 +9,7 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT = (
@@ -30,13 +33,72 @@ class BridgePageTests(unittest.TestCase):
             bookmarkctl.write_json_result({"folderPath": "收藏夹栏/开发"}, path, pretty=True)
             data = path.read_bytes()
             self.assertFalse(data.startswith(b"\xef\xbb\xbf"))
+            self.assertNotIn(b"\r\n", data)
             self.assertEqual(json.loads(data.decode("utf-8"))["folderPath"], "收藏夹栏/开发")
 
-    def test_read_plan_accepts_utf8_with_or_without_bom(self):
+    def test_read_plan_accepts_utf8_without_bom(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "plan.json"
+            path.write_text('[{"id":"1","folderPath":"收藏夹栏/开发"}]', encoding="utf-8")
+            self.assertEqual(bookmarkctl.read_plan(str(path)), [{"id": "1", "folderPath": "收藏夹栏/开发"}])
+
+    def test_read_plan_accepts_utf8_with_bom(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "plan.json"
             path.write_text('\ufeff[{"id":"1","folderPath":"收藏夹栏/开发"}]', encoding="utf-8")
             self.assertEqual(bookmarkctl.read_plan(str(path)), [{"id": "1", "folderPath": "收藏夹栏/开发"}])
+
+    def test_read_plan_strips_bom_from_stdin(self):
+        payload = '\ufeff[{"id":"1","folderPath":"\u6536\u85cf\u5939\u680f/\u5f00\u53d1"}]'
+        with patch.object(bookmarkctl.sys, "stdin", io.StringIO(payload)):
+            self.assertEqual(
+                bookmarkctl.read_plan("-"),
+                [{"id": "1", "folderPath": "收藏夹栏/开发"}],
+            )
+
+    def test_read_plan_rejects_non_utf8_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "plan.json"
+            text = '[{"id":"1","folderPath":"\u6536\u85cf\u5939\u680f"}]'
+            path.write_bytes(text.encode("gbk"))
+            with self.assertRaises(RuntimeError) as raised:
+                bookmarkctl.read_plan(str(path))
+            self.assertIn("不是 UTF-8 文本", str(raised.exception))
+
+    def test_read_plan_expands_user_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "plan.json"
+            path.write_text('[{"id":"1","folderPath":"收藏夹栏/开发"}]', encoding="utf-8")
+            with patch.object(bookmarkctl.Path, "expanduser", return_value=path):
+                self.assertEqual(
+                    bookmarkctl.read_plan("~/plan.json"),
+                    [{"id": "1", "folderPath": "收藏夹栏/开发"}],
+                )
+
+    def test_main_writes_error_json_to_output_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "status.json"
+            config = Path(temporary) / "missing.json"
+            original_argv = sys.argv
+            try:
+                sys.argv = [
+                    "bookmarkctl.py",
+                    "--config",
+                    str(config),
+                    "--pretty",
+                    "--output",
+                    str(output),
+                    "status",
+                ]
+                self.assertEqual(bookmarkctl.main(), 1)
+            finally:
+                sys.argv = original_argv
+            data = output.read_bytes()
+            self.assertFalse(data.startswith(b"\xef\xbb\xbf"))
+            self.assertNotIn(b"\r\n", data)
+            payload = json.loads(data.decode("utf-8"))
+            self.assertFalse(payload["ok"])
+            self.assertIn("尚未安装", payload["error"])
 
     def test_javascript_literal_escapes_html_and_line_separators(self):
         hostile = '</script><img src=x onerror=1>\u2028\u2029&'

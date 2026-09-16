@@ -241,7 +241,10 @@ def invoke_bridge(config: dict[str, Any], request: dict[str, Any], browser: str,
 
 
 def read_plan(path: str) -> list[dict[str, str]]:
-    raw = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8-sig")
+    try:
+        raw = sys.stdin.read() if path == "-" else Path(path).expanduser().read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as error:
+        raise RuntimeError(f"整理方案不是 UTF-8 文本（{path}）：{error}") from error
     # 通过管道传入时也兼容 PowerShell 5.1 可能保留的 UTF-8 BOM。
     raw = raw.lstrip("\ufeff")
     try:
@@ -279,7 +282,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--browser", choices=("edge", "chrome", "brave"))
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--pretty", action="store_true", help="以缩进 JSON 输出")
-    parser.add_argument("--output", type=Path, help="将结果直接写入无 BOM UTF-8 JSON 文件，不依赖控制台编码")
+    parser.add_argument("--output", type=Path, help="将成功或失败结果写入无 BOM UTF-8 JSON 文件；路径中的 ~ 会展开")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for name in ("status", "scan", "backup", "archives", "operations"):
         subparsers.add_parser(name)
@@ -296,7 +299,8 @@ def parse_args() -> argparse.Namespace:
 
 def write_json_result(result: Any, path: Path, pretty: bool) -> None:
     serialized = json.dumps(result, ensure_ascii=False, indent=2 if pretty else None) + "\n"
-    path.write_text(serialized, encoding="utf-8")
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(serialized)
 
 
 def main() -> int:
@@ -307,12 +311,19 @@ def main() -> int:
         browser = args.browser or config.get("browser") or "edge"
         result = invoke_bridge(config, build_request(args), browser, args.timeout)
         if args.output:
-            write_json_result(result, args.output, args.pretty)
+            write_json_result(result, args.output.expanduser(), args.pretty)
         else:
             print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
         return 0
-    except (OSError, RuntimeError) as error:
-        print(json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False), file=sys.stderr)
+    except (OSError, RuntimeError, ValueError) as error:
+        payload = {"ok": False, "error": str(error)}
+        if args.output:
+            try:
+                write_json_result(payload, args.output.expanduser(), args.pretty)
+            except OSError:
+                print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
+        else:
+            print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
         return 1
 
 
