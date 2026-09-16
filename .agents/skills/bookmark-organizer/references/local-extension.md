@@ -8,21 +8,25 @@
 
 - `name` 为 `收藏夹整理助手（本地）`；
 - `manifest_version` 为 `3`；
-- 版本不低于 `1.0.2`；
+- 版本不低于 `2.0.0`；
 - `permissions` 同时包含 `bookmarks`、`downloads`、`activeTab` 与 `storage`。
+- `background.service_worker` 为 `bridge.js`，并包含固定 ID 公钥和仅限 localhost 的外部消息来源。
 
-有 D 盘时，默认位置分别是 `D:\Microsoft-Edge\Local-Extensions\bookmark-organizer` 和 `D:\Google-Chrome\Local-Extensions\bookmark-organizer`。没有 D 盘时，分别使用 `%LOCALAPPDATA%\BrowserLocalExtensions\Microsoft-Edge\bookmark-organizer` 和 `%LOCALAPPDATA%\BrowserLocalExtensions\Google-Chrome\bookmark-organizer`。不要依据扩展 ID 判断身份：解压缩扩展移动目录后 ID 可能变化，应以清单内容校验。
+有 D 盘时，默认位置分别是 `D:\Microsoft-Edge\Local-Extensions\bookmark-organizer` 和 `D:\Google-Chrome\Local-Extensions\bookmark-organizer`。没有 D 盘时，分别使用 `%LOCALAPPDATA%\BrowserLocalExtensions\Microsoft-Edge\bookmark-organizer` 和 `%LOCALAPPDATA%\BrowserLocalExtensions\Google-Chrome\bookmark-organizer`。2.0 使用公开 manifest key 固定扩展 ID，并以清单内容和本地桥接配置共同校验身份。
 
 macOS、Linux 或 Brave 优先运行仓库的 `python installer/install.py --browser <edge|chrome|brave>`。Windows 也可以使用该跨平台安装器；原有 PowerShell 安装器继续可用。安装脚本不能代替用户在浏览器扩展页完成“加载已解压的扩展程序”的确认。
 
 ## 执行边界
 
+- Agent 默认通过 `scripts/bookmarkctl.py` 调用扩展。命令只在执行期间监听随机的 `127.0.0.1` 端口，自动打开短暂桥接窗口，并使用安装时生成的随机令牌验证；不接受局域网或公网连接。
+- `scan`、`status`、`archives`、`operations` 是只读操作；`backup` 只创建文件。`apply-plan` 和 `undo` 会移动书签，必须在用户确认后带 `--confirmed` 调用。
+- 插件页面是人工备用控制台，不再是 Agent 日常流程的交换界面。桥接不可用时先运行 `status`、检查 `~/.bookmark-organizer/bridge.json` 并重新加载扩展。
+
 - 工具栏小窗口用于把当前网页加入 `临时收藏`、阻止全库精确重复、备份和打开整理中心。不同 URL 片段代表不同章节，不得作为精确重复阻止。
 - 用户只要求备份时，点击工具栏小窗口的“立即备份”（它会打开整理中心并自动开始备份），或整理中心的“一键备份收藏夹”。两者都会创建完整、可重新导入的 HTML，报告路径、生成时间与条目数量，不扫描临时收藏、不移动或修改任何书签。
 - 整理中心按日期展示最近 30 份备份，并可显示文件、复制路径或查看恢复方法。浏览器没有供扩展调用的原生 HTML 导入接口；不得把恢复方法按钮描述成自动恢复。
 - 备份列表中的每一份都可以单独“删除备份”。它会删除该备份文件本身、不影响收藏夹，且需要用户在浏览器中二次确认；不得代替用户确认，也不得把它当作清理收藏夹的方式。
-- 归属明显且便于逐条复核的临时收藏，可以在整理中心勾选并指定目录，无需运行全量审计。条目较多或需要语义判断时使用“复制整理任务给 Agent”；其中的 ID 是实时计划的唯一来源，Agent 只能原样回传，不能从离线文件重新提取。用户可把 Agent 的整段回复粘贴到“使用 Agent 自动分类”，扩展会提取其中的 JSON 方案；必须先查看逐条移动预览，再点击“备份并执行整理”。
-- 打开整理中心、扫描和复制任务等简单界面操作默认由用户完成，通常比 Agent 视觉自动化更快。只有用户明确要求代操作或不方便操作时，具备桌面或浏览器自动化能力的 Agent 才代为完成；不得因此跳过用户对移动或删除范围的授权。
+- 整理中心仍支持人工勾选目录和粘贴 Agent JSON，但自动流程应使用 `scan → validate-plan → 用户确认 → apply-plan`，不要求复制粘贴或页面点击。
 - 它会先生成包含根目录语义和时间属性的完整 HTML 归档，归档成功后才移动。归档清理依据专属目录与严格文件名前缀，不依赖会随解压缩目录变化的扩展 ID；只保留最近 30 份。
 - 每次插件整理在本地保存原目录与位置，最近 20 次显示在操作记录中。撤销前再次备份，只把书签移回原位置与原有顺序，不删除整理过程中创建的空目录。
 - 操作记录的“清空记录”只删除插件本地保存的这些记录，不动收藏夹、也不删除任何备份文件；清空后无法再通过记录撤销，需由用户确认后执行。

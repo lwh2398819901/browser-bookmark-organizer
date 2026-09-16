@@ -22,6 +22,18 @@ function Check([bool]$Condition, [string]$Message) {
     else { Write-Host "[MISSING] $Message" -ForegroundColor Red; $script:failed = $true }
 }
 
+function Get-ExtensionId([string]$Key) {
+    $bytes = [Convert]::FromBase64String($Key)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $hash = $sha.ComputeHash($bytes) } finally { $sha.Dispose() }
+    $builder = New-Object Text.StringBuilder
+    for ($index = 0; $index -lt 16; $index++) {
+        [void]$builder.Append([char](97 + ($hash[$index] -shr 4)))
+        [void]$builder.Append([char](97 + ($hash[$index] -band 15)))
+    }
+    return $builder.ToString()
+}
+
 Check (Test-Path -LiteralPath (Join-Path $skillSource 'SKILL.md') -PathType Leaf) 'Skill source in repository'
 Check ($null -ne $python) 'Python command'
 Check (Test-Path -LiteralPath $sharedSkill -PathType Container) "Shared skill: $sharedSkill"
@@ -32,19 +44,49 @@ if (Test-Path -LiteralPath (Join-Path $extensionTarget 'manifest.json') -PathTyp
         $manifest = Get-Content -LiteralPath (Join-Path $extensionTarget 'manifest.json') -Encoding utf8 -Raw | ConvertFrom-Json
         $expectedName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('5pS26JeP5aS55pW055CG5Yqp5omL77yI5pys5Zyw77yJ'))
         $versionValid = $false
-        try { $versionValid = ([version]$manifest.version -ge [version]'1.0.2') } catch { $versionValid = $false }
+        try { $versionValid = ([version]$manifest.version -ge [version]'2.0.0') } catch { $versionValid = $false }
         $permissions = @($manifest.permissions)
 
         Check ($manifest.name -eq $expectedName) 'Extension name'
         Check ($manifest.manifest_version -eq 3) 'Manifest V3 format'
-        Check $versionValid 'Extension version >= 1.0.2'
+        Check $versionValid 'Extension version >= 2.0.0'
         Check (($permissions -contains 'bookmarks') -and ($permissions -contains 'downloads') -and
             ($permissions -contains 'activeTab') -and ($permissions -contains 'storage')) 'Required permissions: bookmarks, downloads, activeTab, storage'
+        Check ($manifest.background.service_worker -eq 'bridge.js') 'Local Agent bridge service worker'
+        Check ($null -ne $manifest.key) 'Stable extension ID key'
+        $matches = @($manifest.externally_connectable.matches)
+        Check (($matches -contains 'http://127.0.0.1/*') -and ($matches -contains 'http://localhost/*')) 'Local-only external message origins'
     } catch { Check $false 'Manifest JSON format' }
 }
 if ($python) {
     try { $auditScript = Join-Path $skillSource 'scripts\audit_bookmarks.py'; & $python.Source $auditScript --help | Out-Null; Check $true 'Audit script is runnable' }
     catch { Check $false 'Audit script is runnable' }
+    try { $bridgeScript = Join-Path $skillSource 'scripts\bookmarkctl.py'; & $python.Source $bridgeScript --help | Out-Null; Check $true 'bookmarkctl is runnable' }
+    catch { Check $false 'bookmarkctl is runnable' }
+}
+
+$bridgeConfig = Join-Path $env:USERPROFILE '.bookmark-organizer\bridge.json'
+Check (Test-Path -LiteralPath $bridgeConfig -PathType Leaf) "Local bridge config: $bridgeConfig"
+if ((Test-Path -LiteralPath $bridgeConfig -PathType Leaf) -and ($null -ne $manifest)) {
+    try {
+        $localConfig = Get-Content -LiteralPath $bridgeConfig -Encoding utf8 -Raw | ConvertFrom-Json
+        $expectedExtensionId = Get-ExtensionId $manifest.key
+        Check ($localConfig.extensionId -eq $expectedExtensionId) 'Bridge config extension ID matches manifest key'
+        Check (-not [string]::IsNullOrWhiteSpace($localConfig.token)) 'Bridge config token is present'
+
+        $extensionBridgeConfig = Join-Path $extensionTarget 'bridge-config.js'
+        Check (Test-Path -LiteralPath $extensionBridgeConfig -PathType Leaf) 'Deployed extension bridge config'
+        if (Test-Path -LiteralPath $extensionBridgeConfig -PathType Leaf) {
+            $source = Get-Content -LiteralPath $extensionBridgeConfig -Encoding utf8 -Raw
+            $match = [regex]::Match($source, 'Object\.freeze\((\{.*\})\)\s*;?')
+            $deployedConfig = if ($match.Success) { $match.Groups[1].Value | ConvertFrom-Json } else { $null }
+            Check ($null -ne $deployedConfig) 'Deployed bridge config format'
+            if ($null -ne $deployedConfig) {
+                Check (-not [string]::IsNullOrWhiteSpace($deployedConfig.token)) 'Deployed extension token is present'
+                Check ($deployedConfig.token -eq $localConfig.token) 'CLI and extension bridge tokens match'
+            }
+        }
+    } catch { Check $false 'Bridge configuration consistency' }
 }
 
 if ($failed) { exit 1 }

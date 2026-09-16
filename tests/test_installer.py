@@ -14,25 +14,33 @@ SPEC.loader.exec_module(installer)
 
 
 class InstallerTests(unittest.TestCase):
-    def write_valid_extension(self, directory: Path, version: str = "1.0.2") -> None:
+    def write_valid_extension(self, directory: Path, version: str = "2.0.0") -> None:
         directory.mkdir(parents=True, exist_ok=True)
         manifest = {
             "name": installer.EXPECTED_NAME,
             "manifest_version": 3,
             "version": version,
             "permissions": sorted(installer.REQUIRED_PERMISSIONS),
+            "key": "YWJj",
+            "background": {"service_worker": "bridge.js"},
+            "externally_connectable": {"matches": ["http://127.0.0.1/*", "http://localhost/*"]},
         }
         (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (directory / "bridge.js").write_text("", encoding="utf-8")
+        (directory / "bridge-config.js").write_text("", encoding="utf-8")
 
     def test_repository_manifest_is_valid(self):
         extension = INSTALLER_PATH.parents[1] / "extension" / "edge-bookmark-organizer"
         manifest = installer.validate_manifest(extension)
-        self.assertEqual(manifest["version"], "1.0.2")
+        self.assertEqual(manifest["version"], "2.0.0")
 
     def test_version_parsing_is_strict(self):
-        self.assertGreaterEqual(installer.version_tuple("1.0.2"), installer.MINIMUM_VERSION)
-        self.assertLess(installer.version_tuple("1.0.0"), installer.MINIMUM_VERSION)
+        self.assertGreaterEqual(installer.version_tuple("2.0.0"), installer.MINIMUM_VERSION)
+        self.assertLess(installer.version_tuple("1.9.9"), installer.MINIMUM_VERSION)
         self.assertEqual(installer.version_tuple("not-a-version"), ())
+
+    def test_extension_id_from_manifest_key_is_stable(self):
+        self.assertEqual(installer.extension_id_from_key("YWJj"), "lkhibglpipabmpokebebeanofnkocccd")
 
     def test_extension_update_replaces_directory_and_removes_stale_files(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -52,6 +60,49 @@ class InstallerTests(unittest.TestCase):
             self.assertFalse((target / "stale.js").exists())
             self.assertFalse(list(root.glob(".target.staging-*")))
             self.assertFalse(list(root.glob(".target.backup-*")))
+
+    def test_extension_install_injects_local_bridge_token(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            target = root / "target"
+            self.write_valid_extension(source)
+
+            installer.install_extension(source, target, update=False, bridge_token="local-secret")
+
+            bridge_config = (target / "bridge-config.js").read_text(encoding="utf-8")
+            self.assertIn('"local-secret"', bridge_config)
+            self.assertNotIn("local-secret", (source / "bridge-config.js").read_text(encoding="utf-8"))
+
+    def test_missing_cli_config_recovers_token_from_deployed_extension(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            extension = root / "extension"
+            extension.mkdir()
+            deployed_token = "deployed-token-that-is-long-enough-1234567890"
+            installer.write_extension_bridge_config(extension, deployed_token)
+            missing_config = root / "home" / "bridge.json"
+
+            with mock.patch.object(installer, "bridge_config_path", return_value=missing_config):
+                config = installer.load_or_create_bridge_config({"key": "YWJj"}, "edge", extension)
+
+            self.assertEqual(config["token"], deployed_token)
+
+    def test_deployed_token_wins_when_cli_config_is_stale(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            extension = root / "extension"
+            extension.mkdir()
+            deployed_token = "deployed-token-that-is-long-enough-1234567890"
+            installer.write_extension_bridge_config(extension, deployed_token)
+            config_path = root / "home" / "bridge.json"
+            config_path.parent.mkdir()
+            config_path.write_text(json.dumps({"token": "stale-token-that-is-long-enough-123456789012"}), encoding="utf-8")
+
+            with mock.patch.object(installer, "bridge_config_path", return_value=config_path):
+                config = installer.load_or_create_bridge_config({"key": "YWJj"}, "edge", extension)
+
+            self.assertEqual(config["token"], deployed_token)
 
     def test_extension_update_rejects_a_file_target(self):
         with tempfile.TemporaryDirectory() as temporary:

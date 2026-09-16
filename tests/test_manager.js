@@ -290,7 +290,7 @@ async function testLocalizedBookmarkBar() {
   await testPopupDuplicateGuard();
   await testUndoRestoresOriginalOrder();
   await testLocalizedBookmarkBar();
-  console.log('Extension 1.0 behavior checks passed.');
+  console.log('Extension 2.0 manager behavior checks passed.');
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;

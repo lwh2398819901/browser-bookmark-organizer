@@ -1,12 +1,12 @@
 # Browser Bookmark Organizer
 
-一个本地优先的浏览器收藏夹整理工具包：AI Agent 负责审计、理解内容和生成计划；Chromium 扩展负责快速收藏、防重复、备份恢复、方案预览和安全执行。
+一个本地优先的浏览器收藏夹整理工具包：AI Agent 通过统一的 `bookmarkctl` 命令与 Chromium 扩展通信，自动取得实时收藏夹、生成方案并安全执行；插件页面保留为人工备用控制台。
 
 不会上传收藏夹内容，也不在代码中存储任何模型 API 密钥。启用链接检查时，脚本会访问被检查的网址。
 
 ## 当前范围
 
-当前 1.0.2 只实现本地使用方案：本机 Agent 加载技能并生成建议，本地扩展负责读取浏览器收藏夹、创建备份、展示方案和执行已确认的移动计划。当前版本不连接远端收藏夹服务，也不建设插件内置的云端 Agent。
+当前 2.0.0 只实现本地使用方案：本机 Agent 加载技能，通过短时 localhost 桥接调用本地扩展。它不需要长期开放端口，不连接远端收藏夹服务，也不建设插件内置的云端 Agent。
 
 ## 能做什么
 
@@ -19,6 +19,7 @@
 - 备份与恢复中心：按日期展示最近备份，可定位文件、复制路径并查看安全恢复步骤。
 - 可视化整理与撤销：把 Agent JSON 转换成逐条移动预览；执行前自动备份，并可通过本地操作记录撤销插件完成的移动。
 - Chromium 安全批量移动：通过 `chrome.bookmarks` API 执行经过确认的移动计划；不自动删除、重命名或替换网址。
+- Agent 自动接管：实时扫描、备份、方案校验、移动、查看记录和撤销均可通过命令完成，无需复制粘贴或视觉点击插件页面。
 
 ## 快速安装（Windows + Edge）
 
@@ -35,7 +36,8 @@ powershell -ExecutionPolicy Bypass -File .\installer\bootstrap.ps1 -Browser Edge
 1. 验证 Python、技能和扩展的文件完整性。
 2. 将技能链接到 `~\.agents\skills\bookmark-organizer`；若无法创建链接则复制。
 3. 将 Edge 扩展复制到 `D:\Microsoft-Edge\Local-Extensions\bookmark-organizer`；没有 D 盘时使用 `%LOCALAPPDATA%\BrowserLocalExtensions\Microsoft-Edge\bookmark-organizer`。传入 `-Browser Chrome` 时，对应目录名为 `Google-Chrome`。
-4. 输出下一步的人为确认操作，并可打开 `edge://extensions`。
+4. 生成仅保存在本机的随机桥接令牌，并输出下一步的人为确认操作。
+5. 可打开 `edge://extensions`。
 
 ### 唯一必须由人确认的步骤
 
@@ -45,7 +47,32 @@ powershell -ExecutionPolicy Bypass -File .\installer\bootstrap.ps1 -Browser Edge
 2. 点击“加载解压缩的扩展”。
 3. 选择脚本输出的 `bookmark-organizer` 扩展目录。
 
-这是浏览器的安全边界，安装脚本不会绕过。之后重启 Cursor、Codex 或其他支持 Agent Skills 的 Agent；它们会发现 `~\.agents\skills\bookmark-organizer`。
+这是浏览器的安全边界，安装脚本不会绕过。更新到 2.0 后必须在扩展卡片点击一次“重新加载”；之后重启 Cursor、Codex 或其他支持 Agent Skills 的 Agent，它们会发现 `~\.agents\skills\bookmark-organizer`。
+
+## Agent 自动操作
+
+安装并重新加载扩展后，Agent 使用技能目录中的 `scripts/bookmarkctl.py`。命令执行时会自动打开一个短暂的本地桥接窗口，完成后自动关闭；用户不需要在插件页面扫描、复制或粘贴。
+
+```powershell
+# 检查连接
+python .\.agents\skills\bookmark-organizer\scripts\bookmarkctl.py --pretty status
+
+# 实时读取“临时收藏”、已有目录和全库重复位置
+python .\.agents\skills\bookmark-organizer\scripts\bookmarkctl.py --pretty scan
+
+# 单独备份，不修改收藏夹
+python .\.agents\skills\bookmark-organizer\scripts\bookmarkctl.py --pretty backup
+
+# 校验 Agent 生成的移动方案，返回预览和 10 分钟有效的 planToken
+python .\.agents\skills\bookmark-organizer\scripts\bookmarkctl.py --pretty validate-plan --file .\plan.json
+
+# 用户确认预览后执行；扩展会先备份
+python .\.agents\skills\bookmark-organizer\scripts\bookmarkctl.py --pretty apply-plan --plan-token <token> --confirmed
+```
+
+还支持 `archives`、`operations` 和 `undo --operation-id <id> --confirmed`。所有输出均为 JSON，Claude Code、Codex、Cursor 或其他能运行本地命令的 Agent 不需要单独适配。插件页面仍可独立完成原有人工操作。
+
+协议、安全边界与排障见[本地 Agent 桥接](docs/local-agent-bridge.md)。
 
 ## 跨平台安装
 
@@ -72,11 +99,11 @@ python installer/install.py --browser edge --update-extension --update-skill
 |---|---|
 | `备份我的收藏夹` | 仅生成完整可导入 HTML，不修改收藏夹 |
 | `整理收藏夹` | 全量审计和建议，不直接改动 |
-| `整理临时收藏夹` | 使用扩展实时扫描；归属明显时直接处理，需要语义判断时生成可粘贴计划 |
+| `整理临时收藏夹` | Agent 自动实时扫描并生成预览；你确认后自动备份和移动 |
 | `检查重复收藏` | 输出精确重复；章节锚点不会被误删 |
 | `检查失效链接` | 进行网络检查，输出待复核清单 |
 | `生成收藏夹深度画像` | 输出 HTML 事实层与 AI 语义层 |
-| `执行已确认的移动计划` | 通过扩展应用计划；不会默认删除 |
+| `执行已确认的移动计划` | 通过本地命令让扩展应用计划；不会默认删除 |
 
 详细触发词和授权边界见 [工作流说明](docs/workflows.md)。
 
@@ -90,7 +117,7 @@ python .\.agents\skills\bookmark-organizer\scripts\audit_bookmarks.py `
 
 加入 `--check-links` 才会检查链接。用 `--baseline <旧 audit.json>` 检查链接状态、标题和重定向变化。脚本还会生成 `ai-profile-brief.md`；Agent 据此写出可审查的 `ai-insights.json` 后，以 `--ai-insights` 再运行一次即可得到深度画像。
 
-日常使用时，点击扩展图标即可把当前网页加入 `临时收藏`；如果全库已有相同网址，扩展只显示原位置。工具栏同时提供“立即备份”和“整理中心”入口，点“立即备份”会打开整理中心并自动开始备份。整理中心展示临时收藏、备份列表、可视化方案与操作记录；归属明显的条目可直接勾选并选择目录，无需全量审计。需要 Agent 自动分类时，由用户复制整理任务并粘贴给 Agent，再把 Agent 的回复粘贴回扩展；这些简单操作通常比 Agent 视觉自动化更快。只有用户明确要求代操作或不方便操作时，Agent 才使用已有的界面自动化能力。任何情况下都不能改从离线文件获取实时 ID。扩展接收的计划示例见 [sample-move-plan.json](examples/sample-move-plan.json)。
+日常使用时，点击扩展图标即可把当前网页加入 `临时收藏`；如果全库已有相同网址，扩展只显示原位置。整理和备份默认由 Agent 通过 `bookmarkctl` 完成，不需要用户复制粘贴，也不使用视觉自动化。整理中心继续展示临时收藏、备份列表、可视化方案与操作记录，供不使用 Agent 时手动操作或排障。任何情况下都不能改从离线文件获取实时 ID。扩展接收的计划示例见 [sample-move-plan.json](examples/sample-move-plan.json)。
 
 备份会将完整收藏夹导出为带根目录和时间属性的可导入 HTML，写入浏览器下载目录下的 `Bookmark-Organizer-Archives`。移动和撤销都会先等待备份成功；自动按下载时间保留严格命名且仍存在的最近 30 份，已经在磁盘删除或移动的文件不会继续显示。也可以手动删除指定的某一备份，它只影响该备份文件、不改收藏夹，并需要二次确认。整理后可从“操作记录”把书签移回原目录与原有顺序；操作记录也可单独清空，不影响收藏夹和备份文件。
 
@@ -103,7 +130,7 @@ python .\.agents\skills\bookmark-organizer\scripts\audit_bookmarks.py `
 # 使用 Chrome 时：.\installer\doctor.ps1 -Browser Chrome
 ```
 
-自检会核验扩展名称、Manifest V3、最低版本 `1.0.2`，以及 `bookmarks`、`downloads`、`activeTab`、`storage` 四项必要权限。
+自检会核验扩展名称、Manifest V3、最低版本 `2.0.0`、固定扩展 ID、localhost 来源、本地桥接后台，以及 CLI 与扩展两侧令牌是否一致；同时检查 `bookmarks`、`downloads`、`activeTab`、`storage` 四项必要权限。自检不会输出令牌。
 
 开发改动可运行回归测试：
 

@@ -4,20 +4,32 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import os
 import platform
+import re
+import secrets
 import shutil
+import sys
 import tempfile
 import uuid
 from pathlib import Path
 
 
 EXPECTED_NAME = "收藏夹整理助手（本地）"
-MINIMUM_VERSION = (1, 0, 2)
+MINIMUM_VERSION = (2, 0, 0)
 REQUIRED_PERMISSIONS = {"bookmarks", "downloads", "activeTab", "storage"}
 BROWSER_NAMES = {"edge": "Microsoft-Edge", "chrome": "Google-Chrome", "brave": "Brave"}
 WINDOWS_JUNCTION_TAG = 0xA0000003
+
+
+def configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
 
 
 def version_tuple(value: str) -> tuple[int, ...]:
@@ -25,6 +37,72 @@ def version_tuple(value: str) -> tuple[int, ...]:
         return tuple(int(part) for part in value.split("."))
     except (TypeError, ValueError):
         return ()
+
+
+def extension_id_from_key(key: str) -> str:
+    """按 Chromium 规则从 manifest 公钥计算稳定扩展 ID。"""
+    try:
+        digest = hashlib.sha256(base64.b64decode(key, validate=True)).digest()[:16]
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("扩展 manifest.key 不是有效的 Base64 公钥。") from error
+    return "".join(chr(97 + nibble) for byte in digest for nibble in (byte >> 4, byte & 0x0F))
+
+
+def bridge_config_path() -> Path:
+    return Path.home() / ".bookmark-organizer" / "bridge.json"
+
+
+def read_extension_bridge_token(extension_dir: Path) -> str:
+    path = extension_dir / "bridge-config.js"
+    if not path.is_file():
+        return ""
+    try:
+        source = path.read_text(encoding="utf-8")
+        match = re.search(r"Object\.freeze\((\{.*\})\)\s*;?", source)
+        payload = json.loads(match.group(1)) if match else {}
+        token = payload.get("token") if isinstance(payload, dict) else ""
+        return token if isinstance(token, str) and len(token) >= 32 else ""
+    except (OSError, json.JSONDecodeError):
+        return ""
+
+
+def load_or_create_bridge_config(manifest: dict, browser: str, extension_dir: Path | None = None) -> dict:
+    path = bridge_config_path()
+    existing: dict = {}
+    if path.is_file():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+    deployed_token = read_extension_bridge_token(extension_dir) if extension_dir else ""
+    config_token = existing.get("token") if isinstance(existing.get("token"), str) else ""
+    token = deployed_token or config_token
+    if len(token) < 32:
+        token = secrets.token_urlsafe(32)
+    return {
+        "schemaVersion": 1,
+        "extensionId": extension_id_from_key(manifest.get("key", "")),
+        "token": token,
+        "browser": browser,
+        **({"browserExecutable": existing["browserExecutable"]} if existing.get("browserExecutable") else {}),
+    }
+
+
+def save_bridge_config(config: dict) -> Path:
+    path = bridge_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if os.name != "nt":
+        path.chmod(0o600)
+    return path
+
+
+def write_extension_bridge_config(extension_dir: Path, token: str) -> None:
+    payload = json.dumps({"token": token}, ensure_ascii=False, separators=(",", ":"))
+    (extension_dir / "bridge-config.js").write_text(
+        f"globalThis.BookmarkOrganizerBridgeConfig = Object.freeze({payload});\n",
+        encoding="utf-8",
+    )
 
 
 def default_extension_root(browser: str) -> Path:
@@ -54,9 +132,15 @@ def validate_manifest(extension_dir: Path) -> dict:
     if manifest.get("manifest_version") != 3:
         raise RuntimeError("扩展不是 Manifest V3。")
     if version_tuple(manifest.get("version", "")) < MINIMUM_VERSION:
-        raise RuntimeError("扩展版本低于 1.0.2。")
+        raise RuntimeError("扩展版本低于 2.0.0。")
     if missing:
         raise RuntimeError(f"扩展缺少权限：{', '.join(sorted(missing))}")
+    extension_id_from_key(manifest.get("key", ""))
+    if manifest.get("background", {}).get("service_worker") != "bridge.js":
+        raise RuntimeError("扩展缺少本地桥接后台。")
+    matches = set(manifest.get("externally_connectable", {}).get("matches", []))
+    if not {"http://127.0.0.1/*", "http://localhost/*"}.issubset(matches):
+        raise RuntimeError("扩展没有限制为本机桥接来源。")
     return manifest
 
 
@@ -124,7 +208,7 @@ def install_skill(source: Path, target: Path, update: bool) -> str:
         return f"无法创建软链接，已复制技能：{target}"
 
 
-def install_extension(source: Path, target: Path, update: bool) -> str:
+def install_extension(source: Path, target: Path, update: bool, bridge_token: str | None = None) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
     target_exists = path_entry_exists(target)
     if target_exists and not target.is_dir():
@@ -136,6 +220,8 @@ def install_extension(source: Path, target: Path, update: bool) -> str:
     backup: Path | None = None
     try:
         shutil.copytree(source, staging, dirs_exist_ok=True)
+        if bridge_token is not None:
+            write_extension_bridge_config(staging, bridge_token)
         validate_manifest(staging)
 
         if target_exists:
@@ -176,22 +262,28 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    configure_stdio()
     args = parse_args()
     repo_root = Path(__file__).resolve().parent.parent
     skill_source = repo_root / ".agents" / "skills" / "bookmark-organizer"
     extension_source = repo_root / "extension" / "edge-bookmark-organizer"
     if not (skill_source / "SKILL.md").is_file():
         raise RuntimeError(f"技能源码不存在：{skill_source}")
-    validate_manifest(extension_source)
+    source_manifest = validate_manifest(extension_source)
 
     skill_target = Path.home() / ".agents" / "skills" / "bookmark-organizer"
     extension_root = args.extension_root.expanduser() if args.extension_root else default_extension_root(args.browser)
     extension_target = extension_root / "bookmark-organizer"
+    bridge_config = load_or_create_bridge_config(source_manifest, args.browser, extension_target)
 
     print(install_skill(skill_source, skill_target, args.update_skill))
-    print(install_extension(extension_source, extension_target, args.update_extension))
+    print(install_extension(extension_source, extension_target, args.update_extension, bridge_config["token"]))
     manifest = validate_manifest(extension_target)
+    write_extension_bridge_config(extension_target, bridge_config["token"])
+    config_path = save_bridge_config(bridge_config)
     print(f"扩展校验通过：{manifest['name']} v{manifest['version']}")
+    print(f"Agent 桥接已配置：{config_path}")
+    print(f"固定扩展 ID：{bridge_config['extensionId']}")
     print("\n仍需用户在浏览器中确认：")
     print("1. 打开 edge://extensions、chrome://extensions 或 brave://extensions。")
     print("2. 开启开发者模式，选择‘加载已解压的扩展程序’。")
