@@ -8,7 +8,7 @@
 
 - `name` 为 `收藏夹整理助手（本地）`；
 - `manifest_version` 为 `3`；
-- 版本不低于 `2.0.0`；
+- 版本不低于 `2.0.1`；
 - `permissions` 同时包含 `bookmarks`、`downloads`、`activeTab` 与 `storage`。
 - `background.service_worker` 为 `bridge.js`，并包含固定 ID 公钥和仅限 localhost 的外部消息来源。
 

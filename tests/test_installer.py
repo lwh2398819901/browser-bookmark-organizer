@@ -14,7 +14,7 @@ SPEC.loader.exec_module(installer)
 
 
 class InstallerTests(unittest.TestCase):
-    def write_valid_extension(self, directory: Path, version: str = "2.0.0") -> None:
+    def write_valid_extension(self, directory: Path, version: str = "2.0.1") -> None:
         directory.mkdir(parents=True, exist_ok=True)
         manifest = {
             "name": installer.EXPECTED_NAME,
@@ -32,11 +32,11 @@ class InstallerTests(unittest.TestCase):
     def test_repository_manifest_is_valid(self):
         extension = INSTALLER_PATH.parents[1] / "extension" / "edge-bookmark-organizer"
         manifest = installer.validate_manifest(extension)
-        self.assertEqual(manifest["version"], "2.0.0")
+        self.assertEqual(manifest["version"], "2.0.1")
 
     def test_version_parsing_is_strict(self):
-        self.assertGreaterEqual(installer.version_tuple("2.0.0"), installer.MINIMUM_VERSION)
-        self.assertLess(installer.version_tuple("1.9.9"), installer.MINIMUM_VERSION)
+        self.assertGreaterEqual(installer.version_tuple("2.0.1"), installer.MINIMUM_VERSION)
+        self.assertLess(installer.version_tuple("2.0.0"), installer.MINIMUM_VERSION)
         self.assertEqual(installer.version_tuple("not-a-version"), ())
 
     def test_extension_id_from_manifest_key_is_stable(self):

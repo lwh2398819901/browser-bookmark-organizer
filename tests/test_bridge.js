@@ -7,7 +7,7 @@ function extensionFile(name) {
   return path.join(__dirname, '..', 'extension', 'edge-bookmark-organizer', name);
 }
 
-function makeEnvironment() {
+function makeEnvironment({ serviceWorker = false } = {}) {
   const tree = [{ id: '0', title: '', children: [
     { id: '1', parentId: '0', index: 0, title: '收藏夹栏', folderType: 'bookmarks-bar', children: [
       { id: '9', parentId: '1', index: 0, title: '临时收藏', children: [
@@ -19,6 +19,7 @@ function makeEnvironment() {
   ] }];
   const storage = {};
   const downloads = [];
+  const downloadRequests = [];
   let listener = null;
   let nextId = 100;
 
@@ -37,11 +38,20 @@ function makeEnvironment() {
     });
   }
 
+  class ServiceWorkerURL extends URL {}
+  if (serviceWorker) {
+    Object.defineProperties(ServiceWorkerURL, {
+      createObjectURL: { value: undefined },
+      revokeObjectURL: { value: undefined }
+    });
+  }
   const context = {
-    console, URL, Blob, Intl, Math, Date, setTimeout, clearTimeout, crypto: webcrypto,
+    console, URL: serviceWorker ? ServiceWorkerURL : URL, Blob, TextEncoder, Intl, Math, Date,
+    setTimeout, clearTimeout, crypto: webcrypto,
+    btoa: value => Buffer.from(value, 'binary').toString('base64'),
     chrome: {
       runtime: {
-        getManifest: () => ({ version: '2.0.0' }),
+        getManifest: () => ({ version: '2.0.1' }),
         onMessageExternal: { addListener(callback) { listener = callback; } }
       },
       bookmarks: {
@@ -68,6 +78,7 @@ function makeEnvironment() {
       },
       downloads: {
         download: async options => {
+          downloadRequests.push(options);
           const item = { id: downloads.length + 1, state: 'complete', exists: true, filename: `D:\\Downloads\\${options.filename.replace(/\//g, '\\')}`, startTime: new Date().toISOString(), fileSize: 1000 };
           downloads.push(item);
           return item.id;
@@ -98,6 +109,7 @@ function makeEnvironment() {
   context.listener = () => listener;
   context.findNode = findNode;
   context.storageData = storage;
+  context.downloadRequests = downloadRequests;
   return context;
 }
 
@@ -178,6 +190,22 @@ function send(context, request, token = 'test-secret', senderUrl = 'http://127.0
   expiredContext.storageData.bookmarkOrganizerPendingPlan.expiresAt = Date.now() - 1;
   const expiredApply = await send(expiredContext, { command: 'plan.apply', planToken: expiring.result.planToken, confirmed: true });
   if (expiredApply.ok || !expiredApply.error.includes('已过期')) throw new Error('Bridge accepted an expired plan token.');
+
+  const serviceWorkerContext = makeEnvironment({ serviceWorker: true });
+  vm.createContext(serviceWorkerContext);
+  vm.runInContext(fs.readFileSync(extensionFile('bridge.js'), 'utf8'), serviceWorkerContext);
+  const serviceWorkerBackup = await send(serviceWorkerContext, { command: 'backup' });
+  if (!serviceWorkerBackup.ok) throw new Error(`Service worker backup failed: ${JSON.stringify(serviceWorkerBackup)}`);
+  if (serviceWorkerBackup.result.stats?.bookmarks !== 1 || serviceWorkerBackup.result.stats?.folders !== 4) {
+    throw new Error(`Service worker backup returned incorrect stats: ${JSON.stringify(serviceWorkerBackup)}`);
+  }
+  const archiveUrl = serviceWorkerContext.downloadRequests[0]?.url || '';
+  const prefix = 'data:text/html;charset=utf-8;base64,';
+  if (!archiveUrl.startsWith(prefix)) throw new Error('Service worker backup did not use the data URL fallback.');
+  const archiveHtml = Buffer.from(archiveUrl.slice(prefix.length), 'base64').toString('utf8');
+  if (!archiveHtml.includes('Git 教程') || !archiveHtml.includes('https://example.test/git')) {
+    throw new Error('Service worker backup did not preserve UTF-8 bookmark content.');
+  }
 
   console.log('Local Agent bridge checks passed.');
 })().catch(error => {

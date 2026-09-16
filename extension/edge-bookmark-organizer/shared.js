@@ -189,15 +189,46 @@
     });
   }
 
+  function supportsArchiveObjectUrl() {
+    return typeof URL !== 'undefined'
+      && typeof URL.createObjectURL === 'function'
+      && typeof URL.revokeObjectURL === 'function'
+      && typeof Blob !== 'undefined';
+  }
+
+  function utf8ToBase64(text) {
+    if (typeof TextEncoder !== 'function' || typeof btoa !== 'function') {
+      throw new Error('当前扩展后台无法编码收藏夹归档。');
+    }
+    const bytes = new TextEncoder().encode(text);
+    const chunkSize = 0x2000;
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+    }
+    return btoa(binary);
+  }
+
+  function createArchiveUrl(content) {
+    if (supportsArchiveObjectUrl()) {
+      return URL.createObjectURL(new Blob([content], { type: 'text/html;charset=utf-8' }));
+    }
+    return `data:text/html;charset=utf-8;base64,${utf8ToBase64(content)}`;
+  }
+
+  function releaseArchiveUrl(url) {
+    if (supportsArchiveObjectUrl() && url.startsWith('blob:')) URL.revokeObjectURL(url);
+  }
+
   async function archiveCurrentBookmarks() {
     const roots = await chrome.bookmarks.getTree();
     const content = bookmarksToNetscapeHtml(roots);
     const stats = bookmarkTreeStats(roots);
     const createdAt = new Date().toISOString();
-    const blobUrl = URL.createObjectURL(new Blob([content], { type: 'text/html;charset=utf-8' }));
+    const archiveUrl = createArchiveUrl(content);
     try {
       const downloadId = await chrome.downloads.download({
-        url: blobUrl,
+        url: archiveUrl,
         filename: archiveFileName(),
         saveAs: false,
         conflictAction: 'uniquify'
@@ -205,7 +236,7 @@
       const item = await waitForDownload(downloadId);
       return { downloadId, filename: item.filename, createdAt, ...stats };
     } finally {
-      URL.revokeObjectURL(blobUrl);
+      releaseArchiveUrl(archiveUrl);
     }
   }
 

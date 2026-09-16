@@ -184,14 +184,18 @@ importScripts('shared.js', 'bridge-config.js');
   }
 
   async function createBackup() {
-    const archive = await core.archiveCurrentBookmarks();
-    const cleanup = await core.trimArchives();
-    return {
-      filename: archive.filename,
-      stats: archive.stats,
-      removedOldArchives: cleanup.removed.length,
-      warnings: cleanup.warnings
-    };
+    try {
+      const archive = await core.archiveCurrentBookmarks();
+      const cleanup = await core.trimArchives();
+      return {
+        filename: archive.filename,
+        stats: { bookmarks: archive.bookmarks, folders: archive.folders },
+        removedOldArchives: cleanup.removed.length,
+        warnings: cleanup.warnings
+      };
+    } catch (error) {
+      throw new Error(`归档失败，未执行任何收藏夹变更：${error?.message || String(error)}`);
+    }
   }
 
   async function validateAndStore(rawPlan) {

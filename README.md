@@ -6,7 +6,7 @@
 
 ## 当前范围
 
-当前 2.0.0 只实现本地使用方案：本机 Agent 加载技能，通过短时 localhost 桥接调用本地扩展。它不需要长期开放端口，不连接远端收藏夹服务，也不建设插件内置的云端 Agent。
+当前 2.0.1 只实现本地使用方案：本机 Agent 加载技能，通过短时 localhost 桥接调用本地扩展。它不需要长期开放端口，不连接远端收藏夹服务，也不建设插件内置的云端 Agent。
 
 ## 能做什么
 
@@ -130,7 +130,7 @@ python .\.agents\skills\bookmark-organizer\scripts\audit_bookmarks.py `
 # 使用 Chrome 时：.\installer\doctor.ps1 -Browser Chrome
 ```
 
-自检会核验扩展名称、Manifest V3、最低版本 `2.0.0`、固定扩展 ID、localhost 来源、本地桥接后台，以及 CLI 与扩展两侧令牌是否一致；同时检查 `bookmarks`、`downloads`、`activeTab`、`storage` 四项必要权限。自检不会输出令牌。
+自检会核验扩展名称、Manifest V3、最低版本 `2.0.1`、固定扩展 ID、localhost 来源、本地桥接后台，以及 CLI 与扩展两侧令牌是否一致；同时检查 `bookmarks`、`downloads`、`activeTab`、`storage` 四项必要权限。自检不会输出令牌。
 
 开发改动可运行回归测试：
 

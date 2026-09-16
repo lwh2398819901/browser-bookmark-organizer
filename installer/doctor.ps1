@@ -44,12 +44,12 @@ if (Test-Path -LiteralPath (Join-Path $extensionTarget 'manifest.json') -PathTyp
         $manifest = Get-Content -LiteralPath (Join-Path $extensionTarget 'manifest.json') -Encoding utf8 -Raw | ConvertFrom-Json
         $expectedName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('5pS26JeP5aS55pW055CG5Yqp5omL77yI5pys5Zyw77yJ'))
         $versionValid = $false
-        try { $versionValid = ([version]$manifest.version -ge [version]'2.0.0') } catch { $versionValid = $false }
+        try { $versionValid = ([version]$manifest.version -ge [version]'2.0.1') } catch { $versionValid = $false }
         $permissions = @($manifest.permissions)
 
         Check ($manifest.name -eq $expectedName) 'Extension name'
         Check ($manifest.manifest_version -eq 3) 'Manifest V3 format'
-        Check $versionValid 'Extension version >= 2.0.0'
+        Check $versionValid 'Extension version >= 2.0.1'
         Check (($permissions -contains 'bookmarks') -and ($permissions -contains 'downloads') -and
             ($permissions -contains 'activeTab') -and ($permissions -contains 'storage')) 'Required permissions: bookmarks, downloads, activeTab, storage'
         Check ($manifest.background.service_worker -eq 'bridge.js') 'Local Agent bridge service worker'
