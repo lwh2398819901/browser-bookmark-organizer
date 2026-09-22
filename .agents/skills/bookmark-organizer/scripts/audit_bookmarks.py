@@ -128,10 +128,14 @@ class NetscapeBookmarks(HTMLParser):
 
 
 def chromium_items(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], set[tuple[str, ...]]]:
+    if not isinstance(payload, dict) or not isinstance(payload.get('roots'), dict):
+        raise ValueError('Chromium 输入必须是包含 roots 对象的 JSON。')
     entries: list[dict[str, Any]] = []
     folders: set[tuple[str, ...]] = set()
 
     def visit(node: dict[str, Any], path: list[str]) -> None:
+        if not isinstance(node, dict) or not isinstance(node.get('children', []), list):
+            raise ValueError('收藏夹节点必须是对象，children 必须是数组。')
         node_type = node.get("type")
         name = str(node.get("name", ""))
         next_path = path + ([name] if node_type == "folder" and name else [])
@@ -169,17 +173,23 @@ def load_items(source: Path, explicit_format: str) -> tuple[list[dict[str, Any]]
     raise ValueError(f"Unsupported format: {fmt}")
 
 
-def title_from_bytes(content: bytes) -> str | None:
+def title_from_bytes(content: bytes, content_type: str = "") -> str | None:
     match = re.search(rb"<title[^>]*>(.*?)</title>", content, re.IGNORECASE | re.DOTALL)
     if not match:
         return None
-    return " ".join(html.unescape(match.group(1).decode("utf-8", errors="replace")).split())[:300]
+    charset = re.search(r'charset\s*=\s*[\"\x27]?([\w-]+)', content_type, re.I)
+    if not charset:
+        charset = re.search(r'charset\s*=\s*[\"\x27]?([\w-]+)', content[:4096].decode('ascii', errors='ignore'), re.I)
+    encoding = charset.group(1) if charset else 'utf-8'
+    try:
+        title = match.group(1).decode(encoding, errors='replace')
+    except LookupError:
+        title = match.group(1).decode('utf-8', errors='replace')
+    return " ".join(html.unescape(title).split())[:300]
 
 
 def http_result_status(code: int) -> str:
-    if code in UNVERIFIED_CODES or 500 <= code <= 599:
-        return "unverified"
-    return "unavailable"
+    return "unavailable" if code in {404, 410} else "unverified"
 
 
 class DomainRateLimiter:
@@ -211,7 +221,8 @@ def retry_delay(error: HTTPError | None, attempt: int) -> float:
 
 def check_one(url: str, timeout: float, limiter: DomainRateLimiter | None = None, retries: int = 2) -> dict[str, Any]:
     headers = {"User-Agent": "Mozilla/5.0 BookmarkOrganizer/1.0", "Accept": "text/html,*/*;q=0.8"}
-    for method in ("HEAD", "GET"):
+    # A bounded GET supplies both availability and title, without a redundant HEAD.
+    for method in ("GET",):
         for attempt in range(max(0, retries) + 1):
             if limiter:
                 limiter.wait(url)
@@ -219,13 +230,18 @@ def check_one(url: str, timeout: float, limiter: DomainRateLimiter | None = None
             try:
                 request = Request(url, headers=request_headers, method=method)
                 with urlopen(request, timeout=timeout) as response:
-                    title = title_from_bytes(response.read(65536)) if method == "GET" else None
-                    return {"status": "available", "http_status": response.status, "final_url": response.geturl(), "page_title": title}
+                    content_type = getattr(response, 'headers', {}).get('Content-Type', '')
+                    html_response = not content_type or 'html' in content_type.lower()
+                    title = title_from_bytes(response.read(65536), content_type) if html_response else None
+                    final_url = response.geturl()
+                    gate = bool(re.search(r'(^|[/_-])(login|signin|sign-in|captcha|challenge)([/_?&-]|$)', urlsplit(final_url).path, re.I)
+                                or (title and re.search(r'^(登录|登入|sign in|log in|verify you are human|just a moment|安全验证|人机验证)(\b|\s|[·|—-]|$)', title, re.I)))
+                    return {"status": "unverified" if gate else "available", "http_status": response.status, "final_url": final_url, "page_title": title,
+                            "title_status": "captured" if title else "missing" if html_response else "not_html",
+                            "reason": "possible_login_or_challenge" if gate else "http_success", "method": method}
             except HTTPError as error:
-                if method == "HEAD" and error.code in {405, 501}:
-                    break
                 status = http_result_status(error.code)
-                if status == "unverified" and attempt < max(0, retries):
+                if (error.code in {408, 425, 429} or 500 <= error.code <= 599) and attempt < max(0, retries):
                     time.sleep(retry_delay(error, attempt))
                     continue
                 return {"status": status, "http_status": error.code, "final_url": error.geturl(), "page_title": None}
@@ -252,15 +268,24 @@ def duplicate_groups(items: list[dict[str, Any]], key_name: str) -> list[dict[st
 def compare_baseline(current: list[dict[str, Any]], baseline_path: Path | None) -> list[dict[str, Any]]:
     if not baseline_path:
         return []
-    previous = json.loads(baseline_path.read_text(encoding="utf-8"))
+    previous = json.loads(baseline_path.read_text(encoding="utf-8-sig"))
+    if not isinstance(previous, dict) or not isinstance(previous.get('link_results', {}), dict):
+        raise ValueError('基线必须是包含 link_results 对象的审计 JSON。')
     prior_links = previous.get("link_results", {})
+    if any(not isinstance(value, dict) for value in prior_links.values()):
+        raise ValueError('基线 link_results 中每项必须是 JSON 对象。')
     changes = []
     for item in current:
         prior = prior_links.get(item["normalized_url"])
         now = item.get("link")
+        if prior is not None and not isinstance(prior, dict):
+            raise ValueError('基线 link_results 中每项必须是 JSON 对象。')
         if not prior or not now:
             continue
-        fields = [field for field in ("status", "final_url", "page_title") if prior.get(field) != now.get(field)]
+        fields = [field for field in ("status", "final_url") if prior.get(field) != now.get(field)]
+        item['title_comparable'] = bool(prior.get('page_title') and now.get('page_title'))
+        if item['title_comparable'] and prior['page_title'] != now['page_title']:
+            fields.append('page_title')
         if fields:
             changes.append({"url": item["url"], "title": item["title"], "changed_fields": fields, "before": prior, "after": now})
     return changes
@@ -377,7 +402,8 @@ def profile_html(audit: dict[str, Any]) -> str:
         f"{structure['deep_folder_bookmarks']} 条收藏位于三级及更深目录，反映出已有的组织层次。",
         f"前五个来源占全部收藏的 {structure['top_five_domain_share_percent']}%，可用于判断来源是否过度集中。",
     ]
-    quality = [("精确重复链接", stats["duplicate_group_count"]), ("同页不同章节／参数", stats["related_url_group_count"]), ("链接可用", link.get("available", 0)), ("链接不可用", link.get("unavailable", 0)), ("需要人工复核", link.get("unverified", 0)), ("相较基线有变化", len(audit["changes"]))]
+    coverage = audit.get('link_coverage', {})
+    quality = [("精确重复链接", stats["duplicate_group_count"]), ("同页不同章节／参数", stats["related_url_group_count"]), ("链接可用", link.get("available", 0)), ("链接不可用", link.get("unavailable", 0)), ("需要人工复核", link.get("unverified", 0)), ("相较基线有变化", len(audit["changes"])), ("采集到标题的链接", coverage.get('titles_captured', 0)), ("具备前后标题、可比较的链接（缺失不代表未变化）", coverage.get('title_comparable', 0))]
     quality_html = "".join(f"<tr><td>{html.escape(label)}</td><td>{count}</td></tr>" for label, count in quality)
     return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>知识版图 · 收藏夹画像</title>
 <style>:root{{--paper:#f5f1e8;--ink:#17221f;--muted:#64736d;--line:#d5d0c4;--green:#1f5b4e;--clay:#a5513a;--gold:#af7a26;--panel:#fcfaf5}}*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 "Microsoft YaHei UI","Noto Sans SC",sans-serif;text-wrap:pretty}}main{{max-width:1180px;margin:auto;padding:30px 32px 64px}}.masthead{{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(260px,.7fr);gap:36px;padding:42px 0 34px;border-bottom:1px solid var(--ink)}}.eyebrow{{margin:0 0 8px;color:var(--green);font-size:12px;letter-spacing:.14em;font-weight:700}}h1,h2,h3{{font-family:"Iowan Old Style","Songti SC",Georgia,serif;line-height:1.12}}h1{{font-size:clamp(42px,7vw,78px);margin:0;letter-spacing:-.05em}}h2{{font-size:28px;margin:0 0 18px}}h3{{font-size:18px;margin:0 0 7px}}p{{margin:0 0 12px}}.masthead aside{{align-self:end;color:var(--muted);font-size:14px}}.cards{{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--line)}}.cards article{{padding:22px 18px 24px 0;border-right:1px solid var(--line)}}.cards article+article{{padding-left:18px}}.cards article:last-child{{border:0}}.cards strong{{display:block;font:44px/1 "Iowan Old Style",Georgia,serif;letter-spacing:-.04em}}.cards span{{color:var(--muted);font-size:13px}}.section{{padding:34px 0;border-bottom:1px solid var(--line)}}.split{{display:grid;grid-template-columns:1fr 1fr;gap:52px}}.bar-row{{margin:0 0 14px}}.bar-row>div{{display:flex;justify-content:space-between;gap:16px;font-size:14px}}.bar-row b{{font-weight:600}}.bar-row i{{display:block;height:5px;background:#e2ddd2;margin-top:7px}}.bar-row em{{display:block;height:100%;background:var(--green)}}.evidence{{padding:20px 22px;background:#e8eee6;border-left:3px solid var(--green)}}.evidence ul{{padding-left:19px;margin:10px 0 0}}.ai-panel{{margin-top:34px;padding:30px 34px;background:var(--ink);color:#f6f2e9}}.ai-panel .eyebrow{{color:#b6d2bd}}.ai-panel .lead{{max-width:850px;font-size:19px;color:#e1e6dd}}.focus-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#405149;margin:28px 0}}.focus-grid article{{background:var(--ink);padding:18px}}.focus-grid p{{color:#d9e1da;font-size:14px}}.focus-grid small,.actions small{{color:#aab8af;font-size:12px}}.ai-columns{{display:grid;grid-template-columns:1fr 1fr;gap:32px;border-top:1px solid #405149;padding-top:22px}}.ai-columns ul,.actions{{margin:8px 0;padding-left:20px}}.actions li{{padding:0 0 12px 6px}}.actions b{{display:block;color:#d9b96f;font-size:12px;letter-spacing:.08em}}.actions span{{display:block}}table{{width:100%;border-collapse:collapse;font-size:14px}}td,th{{padding:11px 0;text-align:left;border-bottom:1px solid var(--line)}}td:last-child,th:last-child{{text-align:right}}.note{{color:var(--muted);font-size:13px;margin-top:16px}}code{{font-family:ui-monospace,Consolas,monospace}}@media(max-width:760px){{main{{padding:18px}}.masthead,.split,.ai-columns{{grid-template-columns:1fr;gap:24px}}.cards{{grid-template-columns:1fr 1fr}}.cards article:nth-child(2){{border-right:0}}.cards article:nth-child(n+3){{border-top:1px solid var(--line)}}.focus-grid{{grid-template-columns:1fr}}.ai-panel{{padding:24px 20px}}}}</style></head><body><main>
@@ -396,7 +422,7 @@ def ai_brief_markdown(audit: dict[str, Any]) -> str:
     for key, value in audit["stats"].items():
         lines.append(f"- {key}: {value}")
     if not audit.get("execution", {}).get("runtime_ids_available", False):
-        lines.extend(["", "> 当前输入为 HTML 导出，书签没有浏览器运行时 ID。它可用于审计、画像和离线重组；实时移动计划必须重新使用配套扩展扫描。"])
+        lines.extend(["", "> 当前输入为 HTML 导出，书签没有浏览器运行时 ID。它可用于审计与画像；离线重组暂无正式工具。实时移动计划必须重新使用配套扩展扫描。"])
     lines.extend(["", "## 现有目录样本", ""])
     for theme, samples in overview["folder_samples"].items():
         lines.append(f"### {theme}")
@@ -413,13 +439,13 @@ def load_ai_insights(path: Path | None) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        raise ValueError(f"Cannot read AI insights: {error}") from error
+        raise ValueError(f"无法读取 AI 解读文件：{path}（{error}）") from error
     if not isinstance(payload, dict):
-        raise ValueError("AI insights must be a JSON object.")
+        raise ValueError("AI 解读必须是 JSON 对象。")
     return payload
 
 
-def main() -> int:
+def run() -> int:
     parser = argparse.ArgumentParser(description="Audit browser bookmarks and create an HTML profile.")
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
@@ -444,6 +470,14 @@ def main() -> int:
         print("[INFO] --baseline implies --check-links; current links will be checked before comparison.", file=sys.stderr)
         args.check_links = True
 
+    args.input = args.input.expanduser()
+    args.output_dir = args.output_dir.expanduser()
+    if args.baseline:
+        args.baseline = args.baseline.expanduser()
+        compare_baseline([], args.baseline)
+    if args.ai_insights:
+        args.ai_insights = args.ai_insights.expanduser()
+    insights = load_ai_insights(args.ai_insights)
     items, detected_format, folders = load_items(args.input, args.format)
     for item in items:
         item["normalized_url"] = normalized_url(item["url"])
@@ -481,15 +515,21 @@ def main() -> int:
             "extension_plan_requires_live_scan": True,
             "note": "HTML exports do not contain browser runtime bookmark IDs; use the companion extension scan before applying a live move plan." if detected_format == "html" else "Runtime IDs came from the Chromium source and must still be refreshed by the companion extension before a live move.",
         },
-        "stats": {"bookmark_count": len(items), "folder_count": folder_count, "duplicate_group_count": len(exact_duplicates), "related_url_group_count": len(related_url_groups)},
+        "stats": {"bookmark_count": len(items), "folder_count": folder_count, "folder_count_policy": "输入中命名目录路径数，包含空目录、根目录及临时收藏；同名同路径合并", "duplicate_group_count": len(exact_duplicates), "related_url_group_count": len(related_url_groups)},
         "profile": {"top_folders": dict(topics.most_common()), "top_domains": dict(domains.most_common())},
         "collection_overview": overview,
-        "ai_insights": load_ai_insights(args.ai_insights),
+        "ai_insights": insights,
         "duplicates": exact_duplicates,
         "related_url_groups": related_url_groups,
         "link_results": links,
         "bookmarks": items,
         "changes": compare_baseline(items, args.baseline),
+    }
+    audit['link_coverage'] = {
+        'checked': len(links), 'titles_captured': sum(bool(item.get('page_title')) for item in links.values()),
+        'title_comparable': len({item['normalized_url'] for item in items if item.get('title_comparable')}),
+        'baseline_supplied': bool(args.baseline),
+        'note': '缺失标题不代表标题未变化；登录/验证页仅作启发式标注。',
     }
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "audit.json").write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -497,6 +537,15 @@ def main() -> int:
     (args.output_dir / "ai-profile-brief.md").write_text(ai_brief_markdown(audit), encoding="utf-8")
     print(json.dumps({"bookmarks": len(items), "folders": folder_count, "duplicate_groups": len(audit["duplicates"]), "output": str(args.output_dir)}, ensure_ascii=False))
     return 0
+
+
+def main() -> int:
+    try:
+        return run()
+    except (OSError, ValueError) as error:
+        message = f"无法访问文件：{error.filename}（系统错误 {error.errno}）" if isinstance(error, OSError) else str(error)
+        print(json.dumps({'ok': False, 'code': 'AUDIT_INPUT_OR_IO_ERROR', 'error': f'审计失败：{message}'}, ensure_ascii=False), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

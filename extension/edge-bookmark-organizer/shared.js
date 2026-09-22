@@ -210,6 +210,7 @@
   async function waitForDownload(downloadId, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
       let settled = false;
+      let timingOut = false;
       let timer;
       const finish = (callback, value) => {
         if (settled) return;
@@ -220,17 +221,34 @@
       };
       const inspect = item => {
         if (item?.state === 'complete') finish(resolve, item);
-        if (item?.state === 'interrupted') finish(reject, new Error(`备份下载中断：${item.error || '未知原因'}`));
+        if (item?.state === 'interrupted' && !timingOut) finish(reject, Object.assign(new Error(`备份下载中断：${item.error || '未知原因'}`), { code: 'ARCHIVE_INTERRUPTED', details: { download: downloadDetails(item) } }));
       };
       const listener = delta => {
         if (delta.id !== downloadId || !delta.state) return;
         if (delta.state.current === 'complete') {
           chrome.downloads.search({ id: downloadId }).then(found => inspect(found[0])).catch(error => finish(reject, error));
         }
-        if (delta.state.current === 'interrupted') finish(reject, new Error(`备份下载中断：${delta.error?.current || '未知原因'}`));
+        if (delta.state.current === 'interrupted' && !timingOut) chrome.downloads.search({ id: downloadId }).then(found => inspect(found[0])).catch(error => finish(reject, error));
       };
       chrome.downloads.onChanged.addListener(listener);
-      timer = setTimeout(() => finish(reject, new Error('备份下载等待超时。')), timeoutMs);
+      timer = setTimeout(async () => {
+        timingOut = true;
+        try {
+          let item = (await chrome.downloads.search({ id: downloadId }))[0];
+          if (item?.state === 'complete') { inspect(item); return; }
+          let cancellation = 'not-needed';
+          if (item?.state === 'in_progress') {
+            try { await chrome.downloads.cancel(downloadId); cancellation = 'requested'; }
+            catch (error) { cancellation = error.message; }
+          }
+          item = (await chrome.downloads.search({ id: downloadId }))[0];
+          if (item?.state === 'complete') { inspect(item); return; }
+          const error = new Error('备份下载等待超时。请检查浏览器下载页中的暂停、待确认或安全检查项目；不要直接重复备份。');
+          error.code = 'ARCHIVE_TIMEOUT';
+          error.details = { download: downloadDetails(item || { id: downloadId }), cancellation, temporaryFileCleanup: 'unverified' };
+          finish(reject, error);
+        } catch (error) { finish(reject, error); }
+      }, timeoutMs);
       chrome.downloads.search({ id: downloadId }).then(found => inspect(found[0])).catch(error => finish(reject, error));
     });
   }
@@ -266,7 +284,7 @@
     if (supportsArchiveObjectUrl() && url.startsWith('blob:')) URL.revokeObjectURL(url);
   }
 
-  async function archiveCurrentBookmarks() {
+  async function archiveCurrentBookmarks(timeoutMs = 30000) {
     const roots = await chrome.bookmarks.getTree();
     const content = bookmarksToNetscapeHtml(roots);
     const stats = bookmarkTreeStats(roots);
@@ -279,7 +297,7 @@
         saveAs: false,
         conflictAction: 'uniquify'
       });
-      const item = await waitForDownload(downloadId);
+      const item = await waitForDownload(downloadId, timeoutMs);
       return { downloadId, filename: item.filename, createdAt, ...stats };
     } finally {
       releaseArchiveUrl(archiveUrl);
@@ -291,6 +309,24 @@
     const escapedPrefix = archivePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const filenamePattern = new RegExp(`[\\\\/]${escapedDirectory}[\\\\/]${escapedPrefix}.+\\.html$`, 'i');
     return item.state === 'complete' && filenamePattern.test(item.filename || '');
+  }
+
+  function downloadDetails(item) {
+    const details = Object.fromEntries(['id', 'filename', 'state', 'error', 'danger', 'paused', 'bytesReceived', 'totalBytes', 'exists', 'startTime', 'fileSize'].map(key => [key, item[key] ?? null]));
+    details.elapsedMs = item.startTime ? Math.max(0, (Date.parse(item.endTime) || Date.now()) - Date.parse(item.startTime)) : null;
+    return details;
+  }
+
+  async function archiveDiagnostics() {
+    const items = await chrome.downloads.search({ query: [archiveDirectory, archivePrefix], orderBy: ['-startTime'], limit: 0 });
+    return items.filter(item => isManagedArchive({ ...item, state: 'complete', filename: (item.filename || '').replace(/\.crdownload$/i, '') }))
+      .map(downloadDetails);
+  }
+
+  function idsUnder(node) {
+    const ids = new Set();
+    if (node) walk(node, [], item => ids.add(item.id));
+    return ids;
   }
 
   async function listManagedArchives() {
@@ -396,6 +432,9 @@
     bookmarksToNetscapeHtml,
     bookmarkTreeStats,
     archiveCurrentBookmarks,
+    waitForDownload,
+    archiveDiagnostics,
+    idsUnder,
     isManagedArchive,
     listManagedArchives,
     trimArchives,

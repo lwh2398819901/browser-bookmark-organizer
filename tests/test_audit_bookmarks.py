@@ -107,6 +107,9 @@ class AuditBookmarksTests(unittest.TestCase):
             def geturl(self):
                 return "https://example.test/"
 
+            def read(self, limit):
+                return b'<title>Recovered</title>'
+
         calls = []
 
         def fake_urlopen(request, timeout):

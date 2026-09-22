@@ -19,7 +19,7 @@ macOS、Linux 或 Brave 优先运行仓库的 `python installer/install.py --bro
 ## 执行边界
 
 - Agent 默认通过 `scripts/bookmarkctl.py` 调用扩展。命令只在执行期间监听随机的 `127.0.0.1` 端口，打开一个完成后自动关闭的短时桥接小窗口，并使用安装时生成的随机令牌验证；不接受局域网或公网连接。
-- `scan`、`status`、`archives`、`operations` 是只读操作；`backup` 只创建文件。`apply-plan` 和 `undo` 会移动书签，必须在用户确认后带 `--confirmed` 调用。
+- `scan`、`status`、`archives`、`downloads`、`operations` 是只读操作；`backup` 只创建文件。`apply-plan` 和 `undo` 会移动书签，必须在用户确认后带 `--confirmed` 调用。
 - 实时移动只覆盖浏览器收藏夹栏之下的区域：目标路径必须以收藏夹栏开头（例如 `收藏夹栏/开发/Git`），扩展也只在收藏夹栏下创建新目录。`其他收藏夹`、`移动设备收藏夹`里的书签不在扩展能力范围内，只能先给出清单，再由用户使用浏览器原生操作。
 - 插件页面是人工备用控制台，不再是 Agent 日常流程的交换界面。桥接不可用时先运行 `status`、检查 `~/.bookmark-organizer/bridge.json` 并重新加载扩展。
 
@@ -31,13 +31,13 @@ macOS、Linux 或 Brave 优先运行仓库的 `python installer/install.py --bro
 - 它会先生成包含根目录语义和时间属性的完整 HTML 归档，归档成功后才移动。归档清理依据专属目录与严格文件名前缀，不依赖会随解压缩目录变化的扩展 ID；只保留最近 30 份。
 - 每次插件整理在本地保存原目录与位置，最近 20 次显示在操作记录中。撤销前再次备份，只把书签移回原位置与原有顺序，不删除整理过程中创建的空目录。
 - 操作记录的“清空记录”只删除插件本地保存的这些记录，不动收藏夹、也不删除任何备份文件；用户点击该明确按钮后直接执行并显示页面内结果，不再弹出确认框。
-- 当前版本不执行标题重命名、URL 替换、书签删除或目录删除。实时删除需求只能先给出可复核清单，再由用户使用浏览器原生操作；离线 HTML 重组则遵守技能中“保留源文件并取得明确删除授权”的边界。
+- 当前版本不执行标题重命名、URL 替换、书签删除或目录删除。实时删除需求只能先给出可复核清单，再由用户使用浏览器原生操作；离线 HTML 重组尚未提供正式工具，不能承诺自动生成整理后的导入文件。
 
 ## Windows 命令行环境的输出与编码
 
 Windows 上由 Agent 代跑 `scripts/bookmarkctl.py` 时，命令可能正常退出，但输出在到达模型前就已损坏。以下两点都会直接污染 `folderPath`：
 
-- **优先使用文件输出**：需要让 Agent 读取 `scan`、`status` 或其他 JSON 结果时，可加 `--output <临时目录>\result.json`。`--output` 是全局参数，必须写在子命令之前（如 `--pretty --output <文件> scan`）；写在子命令之后会被 argparse 拒绝。路径中的 `~` 会展开到用户目录。成功与失败都会写入该文件（失败为 `{"ok": false, "error": "..."}`），不要只看空 stdout。脚本写入无 BOM UTF-8（LF 换行），避免 PowerShell 管道转码，也避免宿主工具不回传 stdout。写入后再用读取工具打开该文件；输出文件只能放在工作区或系统临时目录。
+- **优先使用文件输出**：需要让 Agent 读取 `scan`、`status` 或其他 JSON 结果时，可加 `--output <临时目录>\result.json`。`--output`、`--pretty` 可写在子命令之前或之后；其他全局参数仍写在子命令之前。路径中的 `~` 会展开到用户目录。路径可写时，成功与失败都会写入该文件（失败为 `{"ok": false, "error": "..."}`），不要只看空 stdout。脚本写入无 BOM UTF-8（LF 换行），避免 PowerShell 管道转码，也避免宿主工具不回传 stdout。写入后再用读取工具打开该文件；输出文件只能放在工作区或系统临时目录。
 - **必须使用管道时先设置编码**：PowerShell 5.1 可能按本地代码页解码 Python 输出，中文目录名会变成 `鏀惰棌澶规爮` 这类乱码。执行前设置 `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8`、`$OutputEncoding = [System.Text.Encoding]::UTF8`，并让 Python 保持一致：`$env:PYTHONIOENCODING="utf-8"`。乱码的 `folderPath`、`existingFolders` 既不是命令返回的原文，也无法通过目录校验，**不得据此生成计划**。
 
 计划文件路径中的 `~` 会展开；计划文件必须是 UTF-8（可带 BOM）。记事本另存的 ANSI/GBK 会返回可读错误，而不是 Python traceback。`validate-plan --file` 已兼容带 BOM 与无 BOM。若通过 PowerShell 5.1 写入计划，仍建议使用 PowerShell 7 的 `-Encoding utf8NoBOM`，或使用脚本直接生成无 BOM 文件。向 `python -` 传入 here-string 时，中文字面量可能被替换成 `?`；一次性探针里的中文请用 Python `\uXXXX` 转义，不要依赖 here-string 原文。

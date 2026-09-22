@@ -28,6 +28,25 @@ SPEC.loader.exec_module(bookmarkctl)
 
 
 class BridgePageTests(unittest.TestCase):
+    def test_success_survives_output_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = ['bookmarkctl', '--output', str(Path(temp) / 'missing' / 'out.json'), 'backup']
+            out, err = io.StringIO(), io.StringIO()
+            with patch.object(sys, 'argv', args), patch.object(bookmarkctl, 'configure_stdio'), patch.object(bookmarkctl, 'load_config', return_value={}), patch.object(bookmarkctl, 'invoke_bridge', return_value={'operationId': 'done'}), patch.object(sys, 'stdout', out), patch.object(sys, 'stderr', err):
+                self.assertEqual(bookmarkctl.main(), 1)
+            result = json.loads(out.getvalue())
+            self.assertTrue(result['ok'])
+            self.assertEqual(result['operationId'], 'done')
+            self.assertEqual(result['outputError']['code'], 'OUTPUT_WRITE_FAILED')
+
+    def test_bridge_error_details_preserved(self):
+        out = io.StringIO()
+        with patch.object(sys, 'argv', ['bookmarkctl', 'backup']), patch.object(bookmarkctl, 'configure_stdio'), patch.object(bookmarkctl, 'load_config', return_value={}), patch.object(bookmarkctl, 'invoke_bridge', side_effect=bookmarkctl.BridgeError('超时', 'ARCHIVE_TIMEOUT', {'download': {'id': 7}})), patch.object(sys, 'stderr', out):
+            self.assertEqual(bookmarkctl.main(), 1)
+        result = json.loads(out.getvalue())
+        self.assertEqual(result['code'], 'ARCHIVE_TIMEOUT')
+        self.assertEqual(result['details']['download']['id'], 7)
+
     def test_build_request_preserves_scan_scope(self):
         self.assertEqual(
             bookmarkctl.build_request(SimpleNamespace(command="scan", scope="all")),

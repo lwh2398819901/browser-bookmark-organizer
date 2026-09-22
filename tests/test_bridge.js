@@ -97,8 +97,8 @@ function makeEnvironment({ serviceWorker = false } = {}) {
       },
       storage: {
         local: {
-          async get(defaults) { return { ...defaults, ...storage }; },
-          async set(values) { Object.assign(storage, values); },
+          async get(defaults) { return structuredClone({ ...defaults, ...storage }); },
+          async set(values) { Object.assign(storage, structuredClone(values)); },
           async remove(key) { delete storage[key]; }
         }
       }
@@ -119,6 +119,7 @@ function makeEnvironment({ serviceWorker = false } = {}) {
   context.findNode = findNode;
   context.storageData = storage;
   context.downloadRequests = downloadRequests;
+  context.downloads = downloads;
   return context;
 }
 
@@ -279,7 +280,79 @@ function send(context, request, token = 'test-secret', senderUrl = 'http://127.0
   }
   if (deletedContext.findNode('10').parentId !== '9') throw new Error('Undo did not restore the surviving bookmark.');
 
-  console.log('Local Agent bridge checks passed.');
+  const boot = () => {
+    const env = makeEnvironment();
+    vm.createContext(env);
+    vm.runInContext(fs.readFileSync(extensionFile('bridge.js'), 'utf8'), env);
+    return env;
+  };
+  const assert = require('assert/strict');
+  const plan = [{ id: '10', folderPath: '收藏夹栏/开发' }];
+  const outside = boot();
+  outside.findNode('2').children.push({ id: '20', parentId: '2', index: 0, title: 'Outside', url: 'https://example.test/outside' });
+  const outsideScan = await send(outside, { command: 'scan', scope: 'all' });
+  assert.equal(outsideScan.result.bookmarks.find(item => item.id === '20').movable, false);
+  assert.equal((await send(outside, { command: 'plan.validate', scope: 'all', plan: [{ id: '20', folderPath: '收藏夹栏/开发' }] })).code, 'SOURCE_OUT_OF_SCOPE');
+
+  const duringBackup = boot();
+  const pre = await send(duringBackup, { command: 'plan.validate', plan });
+  const download = duringBackup.chrome.downloads.download;
+  duringBackup.chrome.downloads.download = async options => { duringBackup.findNode('10').title = 'Changed'; return download(options); };
+  assert.equal((await send(duringBackup, { command: 'plan.apply', planToken: pre.result.planToken, confirmed: true })).code, 'PLAN_CHANGED');
+  assert.equal(duringBackup.findNode('10').parentId, '9');
+
+  const concurrent = boot();
+  const token = (await send(concurrent, { command: 'plan.validate', plan })).result.planToken;
+  const pair = await Promise.all([send(concurrent, { command: 'plan.apply', planToken: token, confirmed: true }), send(concurrent, { command: 'plan.apply', planToken: token, confirmed: true })]);
+  assert.equal(pair.filter(item => item.ok).length, 1);
+  assert.equal(pair.find(item => !item.ok).code, 'BUSY');
+  assert.equal((await send(concurrent, { command: 'plan.apply', planToken: token, confirmed: true })).code, 'PLAN_ALREADY_STARTED');
+  concurrent.findNode('10').title = 'User edited';
+  const conflict = await send(concurrent, { command: 'operations.undo', operationId: pair.find(item => item.ok).result.operationId, confirmed: true });
+  assert.equal(conflict.code, 'PARTIAL_UNDO');
+  assert.equal(concurrent.findNode('10').parentId, '11');
+
+  const partial = boot();
+  partial.findNode('9').children.push({ id: '10b', parentId: '9', index: 1, title: 'Second', url: 'https://example.test/2' });
+  const partialPlan = (await send(partial, { command: 'plan.validate', plan: [...plan, { id: '10b', folderPath: '收藏夹栏/开发' }] })).result;
+  const move = partial.chrome.bookmarks.move;
+  partial.chrome.bookmarks.move = async (id, destination) => { if (id === '10b') throw new Error('injected move failure'); return move(id, destination); };
+  const failed = await send(partial, { command: 'plan.apply', planToken: partialPlan.planToken, confirmed: true });
+  assert.equal(failed.code, 'PARTIAL_OPERATION');
+  assert.equal(failed.details.moves[0].state, 'moved');
+  assert.equal(failed.details.moves[1].state, 'pending');
+  partial.chrome.bookmarks.move = move;
+  const recovered = await send(partial, { command: 'operations.undo', operationId: failed.details.operationId, confirmed: true });
+  assert.equal(recovered.ok, true, JSON.stringify(recovered));
+  assert.equal(partial.findNode('9').children.map(item => item.id).join(','), '10,10b');
+
+  const hung = boot();
+  const swap = boot();
+  swap.findNode('1').children.push(
+    { id: '12', parentId: '1', index: 2, title: 'A', children: [{ id: '21', parentId: '12', index: 0, title: 'A1', url: 'https://example.test/a' }] },
+    { id: '13', parentId: '1', index: 3, title: 'B', children: [{ id: '22', parentId: '13', index: 0, title: 'B1', url: 'https://example.test/b' }] }
+  );
+  const swapPlan = await send(swap, { command: 'plan.validate', scope: 'all', plan: [{ id: '21', folderPath: '收藏夹栏/B' }, { id: '22', folderPath: '收藏夹栏/A' }] });
+  const swapped = await send(swap, { command: 'plan.apply', planToken: swapPlan.result.planToken, confirmed: true });
+  assert.equal(swapped.ok, true, JSON.stringify(swapped));
+  const unswapped = await send(swap, { command: 'operations.undo', operationId: swapped.result.operationId, confirmed: true });
+  assert.equal(unswapped.ok, true, JSON.stringify(unswapped));
+  assert.equal(swap.findNode('21').parentId, '12');
+  assert.equal(swap.findNode('22').parentId, '13');
+  hung.downloads.push({ id: 123, filename: 'D:\\Downloads\\Bookmark-Organizer-Archives\\bookmark-archive-test.html', state: 'in_progress', bytesReceived: 100, totalBytes: 100, danger: 'asyncScanning' });
+  let cancelled = 0;
+  hung.chrome.downloads.cancel = async id => { assert.equal(id, 123); cancelled++; hung.downloads[0].state = 'interrupted'; };
+  await assert.rejects(hung.BookmarkOrganizerCore.waitForDownload(123, 5), error => error.code === 'ARCHIVE_TIMEOUT' && error.details.download.id === 123 && error.details.temporaryFileCleanup === 'unverified');
+  assert.equal(cancelled, 1);
+  assert.equal((await send(hung, { command: 'downloads.list' })).result.downloads.length, 1);
+  assert.equal((await send(hung, { command: 'archives.list' })).result.archives.length, 0);
+  hung.downloads[0].state = 'in_progress';
+  hung.chrome.downloads.cancel = async () => { throw new Error('cancel failed'); };
+  await assert.rejects(hung.BookmarkOrganizerCore.waitForDownload(123, 5), error => error.details.cancellation === 'cancel failed');
+  hung.downloads[0].state = 'interrupted';
+  hung.downloads[0].error = 'FILE_ACCESS_DENIED';
+  await assert.rejects(hung.BookmarkOrganizerCore.waitForDownload(123, 5), error => error.code === 'ARCHIVE_INTERRUPTED' && error.details.download.error === 'FILE_ACCESS_DENIED');
+  console.log('Local Agent bridge checks passed (including failure, concurrency and recovery scenarios).');
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;

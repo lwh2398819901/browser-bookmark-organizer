@@ -200,6 +200,13 @@ def bridge_handler(page: bytes, nonce: str, state: dict[str, Any], completed: th
     return Handler
 
 
+class BridgeError(RuntimeError):
+    def __init__(self, message: str, code: str, details: Any = None):
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
+
+
 def invoke_bridge(config: dict[str, Any], request: dict[str, Any], browser: str, timeout: float) -> Any:
     nonce = uuid.uuid4().hex
     state: dict[str, Any] = {"response": None}
@@ -225,14 +232,12 @@ def invoke_bridge(config: dict[str, Any], request: dict[str, Any], browser: str,
             stderr=subprocess.DEVNULL,
         )
         if not completed.wait(timeout):
-            raise RuntimeError(
-                f"等待扩展响应超时（{timeout:g} 秒）。请确认扩展已启用并重新加载，扩展 ID 为 {config['extensionId']}。"
-            )
+            raise BridgeError(f"等待扩展响应超时（{timeout:g} 秒），执行结果未知。请查询 operations、downloads 或 scan 后再决定是否重试。", "RESULT_UNKNOWN", {"command": request.get("command"), "planToken": request.get("planToken")})
         response = state["response"]
         if not isinstance(response, dict):
             raise RuntimeError("扩展返回了无法识别的响应。")
         if not response.get("ok"):
-            raise RuntimeError(str(response.get("error") or "扩展执行失败。"))
+            raise BridgeError(str(response.get("error") or "扩展执行失败。"), response.get("code", "COMMAND_FAILED"), response.get("details"))
         return response.get("result")
     finally:
         server.shutdown()
@@ -247,6 +252,8 @@ def read_plan(path: str) -> list[dict[str, str]]:
         raw = sys.stdin.read() if path == "-" else Path(path).expanduser().read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as error:
         raise RuntimeError(f"整理方案不是 UTF-8 文本（{path}）：{error}") from error
+    except OSError as error:
+        raise RuntimeError(f"无法读取整理方案文件：{path}（系统错误 {error.errno}）") from error
     # 通过管道传入时也兼容 PowerShell 5.1 可能保留的 UTF-8 BOM。
     raw = raw.lstrip("\ufeff")
     try:
@@ -265,6 +272,8 @@ def build_request(args: argparse.Namespace) -> dict[str, Any]:
         return {"command": "scan", "scope": args.scope}
     if args.command == "archives":
         return {"command": "archives.list"}
+    if args.command == "downloads":
+        return {"command": "downloads.list"}
     if args.command == "operations":
         return {"command": "operations.list"}
     if args.command == "validate-plan":
@@ -284,7 +293,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="通过本地浏览器扩展管理收藏夹")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--browser", choices=("edge", "chrome", "brave"))
-    parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--timeout", type=float, default=60.0, help="等待桥接结果的秒数；归档等待预留 10 秒用于取消与回传")
     parser.add_argument("--pretty", action="store_true", help="以缩进 JSON 输出")
     parser.add_argument("--output", type=Path, help="将成功或失败结果写入无 BOM UTF-8 JSON 文件；路径中的 ~ 会展开")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -292,7 +301,7 @@ def parse_args() -> argparse.Namespace:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--pretty", action="store_true", default=argparse.SUPPRESS, help="以缩进 JSON 输出")
     common.add_argument("--output", type=Path, default=argparse.SUPPRESS, help="将成功或失败结果写入无 BOM UTF-8 JSON 文件；路径中的 ~ 会展开")
-    for name in ("status", "backup", "archives", "operations"):
+    for name in ("status", "backup", "archives", "operations", "downloads"):
         subparsers.add_parser(name, parents=[common])
     scan = subparsers.add_parser("scan", parents=[common])
     scan.add_argument("--scope", choices=("temporary", "all"), default="temporary")
@@ -305,7 +314,10 @@ def parse_args() -> argparse.Namespace:
     undo = subparsers.add_parser("undo", parents=[common])
     undo.add_argument("--operation-id")
     undo.add_argument("--confirmed", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not 11 <= args.timeout <= 310:
+        parser.error("--timeout 必须在 11–310 秒之间。")
+    return args
 
 
 def write_json_result(result: Any, path: Path, pretty: bool) -> None:
@@ -320,18 +332,28 @@ def main() -> int:
     try:
         config = load_config(args.config.expanduser())
         browser = args.browser or config.get("browser") or "edge"
-        result = invoke_bridge(config, build_request(args), browser, args.timeout)
+        request = build_request(args)
+        request["archiveTimeoutMs"] = int((args.timeout - 10) * 1000)
+        result = invoke_bridge(config, request, browser, args.timeout)
+        result = {**result, "ok": True} if isinstance(result, dict) else {"ok": True, "result": result}
         if args.output:
-            write_json_result(result, args.output.expanduser(), args.pretty)
+            try:
+                write_json_result(result, args.output.expanduser(), args.pretty)
+            except OSError as error:
+                result["outputError"] = {"code": "OUTPUT_WRITE_FAILED", "error": f"操作已成功，但结果文件无法写入（系统错误 {error.errno}）：{args.output}"}
+                print(json.dumps(result, ensure_ascii=False))
+                print(result["outputError"]["error"], file=sys.stderr)
+                return 1
         else:
             print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
         return 0
     except (OSError, RuntimeError, ValueError) as error:
-        payload = {"ok": False, "error": str(error)}
+        payload = {"ok": False, "error": str(error), "code": getattr(error, "code", "INPUT_OR_COMMAND_ERROR"), "details": getattr(error, "details", {})}
         if args.output:
             try:
                 write_json_result(payload, args.output.expanduser(), args.pretty)
             except OSError:
+                print(json.dumps(payload, ensure_ascii=False))
                 print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
         else:
             print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)

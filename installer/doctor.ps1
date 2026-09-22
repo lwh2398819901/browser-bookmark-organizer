@@ -2,7 +2,9 @@
 param(
     [ValidateSet('Edge', 'Chrome', 'Brave')]
     [string]$Browser = 'Edge',
-    [string]$ExtensionRoot
+    [string]$ExtensionRoot,
+    [switch]$RuntimeCheck,
+    [switch]$ArchiveTest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +40,16 @@ function Get-ExtensionId([string]$Key) {
 Check (Test-Path -LiteralPath (Join-Path $skillSource 'SKILL.md') -PathType Leaf) 'Skill source in repository'
 Check ($null -ne $python) 'Python command'
 Check (Test-Path -LiteralPath $sharedSkill -PathType Container) "Shared skill: $sharedSkill"
+if (Test-Path -LiteralPath $sharedSkill -PathType Container) {
+    $skillDrift = @()
+    foreach ($sourceFile in (Get-ChildItem -LiteralPath $skillSource -File -Recurse | Where-Object { $_.Extension -ne '.pyc' })) {
+        $relative = $sourceFile.FullName.Substring($skillSource.Length).TrimStart('\', '/')
+        $targetFile = Join-Path $sharedSkill $relative
+        if (-not (Test-Path -LiteralPath $targetFile -PathType Leaf)) { $skillDrift += $relative }
+        elseif ((Get-FileHash -LiteralPath $sourceFile.FullName).Hash -ne (Get-FileHash -LiteralPath $targetFile).Hash) { $skillDrift += $relative }
+    }
+    Check ($skillDrift.Count -eq 0) 'Deployed skill files match repository source'
+}
 Check (Test-Path -LiteralPath (Join-Path $extensionTarget 'manifest.json') -PathType Leaf) "Extension directory: $extensionTarget"
 
 if (Test-Path -LiteralPath (Join-Path $extensionTarget 'manifest.json') -PathType Leaf) {
@@ -109,4 +121,18 @@ if ((Test-Path -LiteralPath $bridgeConfig -PathType Leaf) -and ($null -ne $manif
 }
 
 if ($failed) { exit 1 }
-Write-Host 'Checks complete. Confirm extension registration manually on the browser extensions page.' -ForegroundColor Cyan
+Write-Host 'Static installation checks complete; this does not prove runtime or archive health.' -ForegroundColor Cyan
+if ($RuntimeCheck -or $ArchiveTest) {
+    $runtimeFile = Join-Path ([IO.Path]::GetTempPath()) ('bookmark-doctor-' + [guid]::NewGuid().ToString() + '.json')
+    & $python.Source $bridgeScript --browser $Browser.ToLowerInvariant() --output $runtimeFile status
+    if ($LASTEXITCODE -ne 0) { Check $false "Runtime connection failed; see $runtimeFile" }
+    else {
+        $runtimeResult = Get-Content -LiteralPath $runtimeFile -Raw -Encoding utf8 | ConvertFrom-Json
+        Check ($runtimeResult.extensionVersion -eq $manifest.version) 'Loaded runtime version matches deployed manifest'
+    }
+    if ($ArchiveTest -and -not $failed) {
+        & $python.Source $bridgeScript --browser $Browser.ToLowerInvariant() --output $runtimeFile backup
+        Check ($LASTEXITCODE -eq 0) "Explicit archive test (creates an HTML backup); result: $runtimeFile"
+    }
+} else { Write-Host 'Runtime not checked. Use -RuntimeCheck; -ArchiveTest additionally creates a backup.' }
+if ($failed) { exit 1 }

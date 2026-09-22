@@ -85,7 +85,10 @@ function makeEnvironment(currentUrl = 'https://new.example.test/article') {
         id: 'new-extension-id',
         getURL: file => `chrome-extension://test/${file}`,
         getManifest: () => ({ version: '2.0.3' }),
+        onMessage: { addListener(callback) { context.internalListener = callback; } },
+        onMessageExternal: { addListener() {} },
         async sendMessage(message) {
+          if (context.internalListener) return new Promise(resolve => context.internalListener(message, { id: 'new-extension-id' }, resolve));
           if (message?.channel !== 'bookmark-organizer-popup' || message?.request?.command !== 'backup') {
             return { ok: false, error: 'unsupported' };
           }
@@ -159,9 +162,16 @@ function makeEnvironment(currentUrl = 'https://new.example.test/article') {
       storage: {
         local: {
           async get(defaults) { return { ...defaults, ...storage }; },
-          async set(values) { Object.assign(storage, values); }
+          async set(values) { Object.assign(storage, structuredClone(values)); },
+          async remove(key) { delete storage[key]; }
         }
       }
+    }
+  };
+  context.importScripts = (...names) => {
+    for (const name of names) {
+      if (name === 'bridge-config.js') context.BookmarkOrganizerBridgeConfig = { token: 'test-secret' };
+      else vm.runInContext(fs.readFileSync(extensionFile(name), 'utf8'), context);
     }
   };
   context.globalThis = context;
@@ -178,6 +188,7 @@ function makeEnvironment(currentUrl = 'https://new.example.test/article') {
 function load(context, file) {
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(file, 'utf8'), context);
+  vm.runInContext(fs.readFileSync(extensionFile('bridge.js'), 'utf8'), context);
 }
 
 function extensionFile(name) {
@@ -237,7 +248,7 @@ async function testManager() {
 
   await context.elements.get('#scan').listeners.click();
   context.elements.get('#plan').value = `方案如下：\n\`\`\`json\n${JSON.stringify([{ id: '10', folderPath: '收藏夹栏/开发' }])}\n\`\`\``;
-  context.elements.get('#validate-plan').listeners.click();
+  await context.elements.get('#validate-plan').listeners.click();
   if (context.elements.get('#apply').disabled) throw new Error('A valid plan was not enabled.');
   await context.elements.get('#apply').listeners.click();
   if (context.findNode('10').parentId !== '11') throw new Error(`Plan did not move the bookmark: ${context.elements.get('#result').textContent}`);
@@ -285,7 +296,7 @@ async function testUndoRestoresOriginalOrder() {
     { id: '10b', folderPath: '收藏夹栏/开发' },
     { id: '10c', folderPath: '收藏夹栏/开发' }
   ]);
-  context.elements.get('#validate-plan').listeners.click();
+  await context.elements.get('#validate-plan').listeners.click();
   await context.elements.get('#apply').listeners.click();
   const undoButton = findButton(context.elements.get('#history-list'), '撤销本次整理');
   if (!undoButton) throw new Error('Undo action was not rendered.');
@@ -303,7 +314,7 @@ async function testLocalizedBookmarkBar() {
   await tick();
   await context.elements.get('#scan').listeners.click();
   context.elements.get('#plan').value = JSON.stringify([{ id: '10', folderPath: 'bookmarks_bar/Development' }]);
-  context.elements.get('#validate-plan').listeners.click();
+  await context.elements.get('#validate-plan').listeners.click();
   if (context.elements.get('#apply').disabled) throw new Error('Logical root alias was not accepted in an English browser.');
   await context.elements.get('#apply').listeners.click();
   if (context.findNode('10').parentId !== '11') throw new Error('Localized bookmark-bar plan was not applied.');
@@ -322,7 +333,7 @@ async function testUndoSkipsDeletedBookmarks() {
     { id: '10', folderPath: '收藏夹栏/开发' },
     { id: '10b', folderPath: '收藏夹栏/开发' }
   ]);
-  context.elements.get('#validate-plan').listeners.click();
+  await context.elements.get('#validate-plan').listeners.click();
   await context.elements.get('#apply').listeners.click();
 
   const removed = context.findNode('10b');

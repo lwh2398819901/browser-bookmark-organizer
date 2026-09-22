@@ -5,7 +5,14 @@
   const operationStore = core.createOperationStore('bookmarkOrganizerOperations', 20);
   let scan = null;
   let validatedPlan = null;
-  let validatedPlanSignature = null;
+  let previewRevision = 0;
+  let planToken = null;
+
+  async function background(request) {
+    const reply = await chrome.runtime.sendMessage({ channel: 'bookmark-organizer-manager', request });
+    if (!reply?.ok) throw new Error(`${reply?.error || '后台无响应'}${reply?.details?.operationId ? `（操作 ${reply.details.operationId}）` : ''}`);
+    return reply.result;
+  }
 
   const bookmarkCount = document.querySelector('#bookmark-count');
   const folderCount = document.querySelector('#folder-count');
@@ -220,6 +227,7 @@
       if (!item || typeof item.id !== 'string' || typeof item.folderPath !== 'string') throw new Error('每项都需要字符串 id 和 folderPath。');
       const bookmark = temporaryById.get(item.id);
       if (!bookmark) throw new Error(`书签 ${item.id} 不在当前“临时收藏”中。`);
+      if (!core.idsUnder(scan.bookmarkBar).has(item.id)) throw new Error('来源位于收藏夹栏之外，仅支持扫描。');
       if (seen.has(item.id)) throw new Error(`书签 ${item.id} 重复出现在方案中。`);
       seen.add(item.id);
       const path = core.normalizePath(item.folderPath);
@@ -245,9 +253,15 @@
     return core.missingFolderPaths(scan.folders.map(folder => folder.path.join('/')), plan);
   }
 
-  function renderPlan(plan) {
+  async function renderPlan(plan) {
+    const revision = ++previewRevision;
+    planToken = null;
+    applyButton.disabled = true;
+    const checked = await background({ command: 'plan.validate', plan: plan.map(item => ({ id: item.id, folderPath: item.folderPath.join('/') })) });
+    if (revision !== previewRevision) return;
+    if (checked.preview.some((item, index) => item.id !== plan[index].id || item.title !== plan[index].title || item.url !== plan[index].url || item.fromPath !== plan[index].fromPath.join('/') || item.folderPath !== plan[index].folderPath.join('/'))) throw new Error('扫描后条目已改变，请重新扫描并预览。');
+    planToken = checked.planToken;
     validatedPlan = plan;
-    validatedPlanSignature = core.planSignature(plan);
     planPreview.replaceChildren();
     const missing = missingFolderPaths(plan);
     planSummary.className = 'plan-summary';
@@ -269,36 +283,15 @@
   }
 
   function clearPlan(message = '') {
+    previewRevision += 1;
+    planToken = null;
     validatedPlan = null;
-    validatedPlanSignature = null;
     planPreview.replaceChildren();
     planSummary.className = 'plan-summary empty';
     planSummary.textContent = '尚未生成或导入整理方案。';
     applyButton.disabled = true;
     clearPlanButton.disabled = true;
     if (message) setMessage(result, message);
-  }
-
-  async function ensureFolder(path) {
-    const roots = await chrome.bookmarks.getTree();
-    const bar = core.findBookmarkBar(roots);
-    if (!bar) throw new Error('没有找到收藏夹栏。');
-    let parentId = bar.id;
-    const created = [];
-    for (const title of path.slice(1)) {
-      const children = await chrome.bookmarks.getChildren(parentId);
-      let folder = children.find(child => !child.url && child.title === title);
-      if (!folder) {
-        folder = await chrome.bookmarks.create({ parentId, title });
-        created.push(folder.id);
-      }
-      parentId = folder.id;
-    }
-    return { id: parentId, created };
-  }
-
-  function operationId() {
-    return globalThis.crypto?.randomUUID?.() || `operation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
 
   async function renderHistory() {
@@ -313,9 +306,10 @@
     for (const operation of operations) {
       const row = createElement('article', `history-item${operation.undoneAt ? ' undone' : ''}`);
       const content = createElement('div');
-      content.append(createElement('p', 'item-title', `${core.formatDate(operation.createdAt)} · 移动 ${operation.moves.length} 条`));
-      const state = operation.undoneAt ? `已于 ${core.formatDate(operation.undoneAt)} 撤销` : operation.status === 'partial' ? '执行中断，可撤销已完成部分' : '已完成';
+      content.append(createElement('p', 'item-title', `${core.formatDate(operation.createdAt)} · 已移动 ${operation.moves.filter(item => item.state !== 'pending').length} 条，待核对 ${operation.moves.filter(item => item.state === 'pending').length} 条`));
+      const state = operation.undoneAt ? `已于 ${core.formatDate(operation.undoneAt)} 撤销` : operation.undoStatus === 'partial' ? '撤销有冲突，请查看操作详情' : operation.status === 'complete' ? '已完成' : '未完成，需核对逐项记录';
       content.append(createElement('p', 'item-meta', state));
+      for (const conflict of operation.undoConflicts || []) content.append(createElement('p', 'item-meta', `条目 ${conflict.id}：${conflict.error}`));
       content.append(createElement('p', 'item-meta', `整理前备份：${operation.archivePath}`));
       row.append(content);
       if (!operation.undoneAt && operation.moves.length && operation.id === latestActiveId) {
@@ -333,40 +327,13 @@
     button.disabled = true;
     setMessage(result, '正在备份当前状态并撤销…');
     try {
-      const operations = await operationStore.load();
-      const operation = operations.find(item => item.id === id);
-      if (!operation || operation.undoneAt) throw new Error('这条操作记录不存在或已经撤销。');
-      const undoArchive = await core.archiveCurrentBookmarks();
-      await core.trimArchives();
-      const byParent = new Map();
-      for (const move of operation.moves) {
-        const group = byParent.get(move.fromParentId) || [];
-        group.push(move);
-        byParent.set(move.fromParentId, group);
-      }
-      let restored = 0;
-      let skipped = 0;
-      for (const group of byParent.values()) {
-        group.sort((left, right) => left.fromIndex - right.fromIndex);
-        for (const move of group) {
-          if (!(await core.bookmarkExists(move.id))) {
-            skipped += 1;
-            continue;
-          }
-          const destination = { parentId: move.fromParentId };
-          if (Number.isInteger(move.fromIndex)) destination.index = move.fromIndex;
-          await chrome.bookmarks.move(move.id, destination);
-          restored += 1;
-        }
-      }
-      operation.undoneAt = new Date().toISOString();
-      operation.undoArchivePath = undoArchive.filename;
-      await operationStore.save(operations);
+      const response = await background({ command: 'operations.undo', operationId: id, confirmed: true });
+      const { restoredCount: restored, skippedCount: skipped, backup: undoArchive } = response;
       const skippedNote = skipped ? `；${skipped} 条书签已被删除，无法放回` : '';
       setMessage(result, `撤销完成：${restored} 条书签已移回原目录${skippedNote}。撤销前备份：${undoArchive.filename}`, 'success');
       await Promise.all([renderHistory(), refreshOverview()]);
     } catch (error) {
-      setMessage(result, `撤销中断：${error.message}。当前状态已经在撤销前备份中保留。`, 'error');
+      setMessage(result, `撤销中断：${error.message}。请核对操作记录后再决定下一步。`, 'error');
     } finally {
       button.disabled = false;
     }
@@ -376,8 +343,9 @@
     try {
       backupButton.disabled = true;
       setMessage(backupStatus, '正在备份当前全部收藏夹…');
-      const archive = await core.archiveCurrentBookmarks();
-      const cleanup = await core.trimArchives();
+      const response = await background({ command: 'backup' });
+      const archive = { ...response, ...response.stats };
+      const cleanup = { removed: Array(response.removedOldArchives).fill(''), warnings: response.warnings };
       setMessage(backupStatus, `备份完成：${archive.bookmarks} 条书签、${archive.folders} 个文件夹。\n${archive.filename}\n本次没有修改收藏夹。${core.archiveCleanupMessage(cleanup)}`, 'success');
       await refreshArchives();
     } catch (error) {
@@ -423,7 +391,7 @@
     setMessage(scanStatus, '整理任务已复制。粘贴给 Agent；完成后把它的整段回复粘贴到“使用 Agent 自动分类”。', 'success');
   });
 
-  buildManualPlanButton.addEventListener('click', () => {
+  buildManualPlanButton.addEventListener('click', async () => {
     try {
       const selectedIds = [...temporaryList.querySelectorAll('input[type="checkbox"]:checked')].map(input => input.dataset.bookmarkId);
       if (!selectedIds.length) throw new Error('请先选择至少一条临时收藏。');
@@ -431,7 +399,7 @@
       if (!target) throw new Error('请输入或选择目标目录。');
       const rawPlan = selectedIds.map(id => ({ id, folderPath: target }));
       planInput.value = JSON.stringify(rawPlan, null, 2);
-      renderPlan(validatePlan(rawPlan));
+      await renderPlan(validatePlan(rawPlan));
       const panel = document.querySelector('#plan-panel');
       globalThis.scrollTo?.({ top: Math.max(0, panel.offsetTop - 16), behavior: 'smooth' });
     } catch (error) {
@@ -439,9 +407,9 @@
     }
   });
 
-  validatePlanButton.addEventListener('click', () => {
+  validatePlanButton.addEventListener('click', async () => {
     try {
-      renderPlan(validatePlan());
+      await renderPlan(validatePlan());
     } catch (error) {
       clearPlan();
       setMessage(result, `方案未通过：${error.message}`, 'error');
@@ -449,7 +417,6 @@
   });
 
   planInput.addEventListener('input', () => {
-    if (!validatedPlan) return;
     clearPlan('方案内容已改变，请重新校验。');
   });
 
@@ -460,69 +427,20 @@
 
   applyButton.addEventListener('click', async () => {
     if (!validatedPlan) return;
-    const planToApply = validatedPlan;
-    const moved = [];
-    let archive = null;
-    let operationSaved = false;
     try {
       applyButton.disabled = true;
       backupButton.disabled = true;
-      setMessage(result, '正在重新扫描并校验方案…');
-      scan = await scanBookmarks();
-      const currentPlan = validatePlan(planToApply.map(item => ({ id: item.id, folderPath: item.folderPath.join('/') })));
-      if (core.planSignature(currentPlan) !== validatedPlanSignature) throw new Error('收藏夹状态或方案已经改变，请重新预览。');
-      setMessage(result, '正在备份当前全部收藏夹…');
-      archive = await core.archiveCurrentBookmarks();
-      const cleanup = await core.trimArchives();
-      setMessage(result, '备份成功，正在执行移动…');
-      const originalPlacements = new Map();
-      for (const item of currentPlan) {
-        const current = (await chrome.bookmarks.get(item.id))[0];
-        if (!current) throw new Error(`无法读取书签 ${item.id}。`);
-        originalPlacements.set(item.id, { parentId: current.parentId, index: current.index });
-      }
-      for (const item of currentPlan) {
-        const placement = originalPlacements.get(item.id);
-        const originalParentId = placement.parentId;
-        const originalIndex = placement.index;
-        const destination = await ensureFolder(item.folderPath);
-        await chrome.bookmarks.move(item.id, { parentId: destination.id });
-        moved.push({
-          id: item.id,
-          title: item.title,
-          url: item.url,
-          fromParentId: originalParentId,
-          fromIndex: originalIndex,
-          fromPath: item.fromPath,
-          toPath: item.folderPath
-        });
-      }
-      await operationStore.add({
-        id: operationId(),
-        createdAt: new Date().toISOString(),
-        status: 'complete',
-        archivePath: archive.filename,
-        moves: moved
-      });
-      operationSaved = true;
-      setMessage(result, `整理完成：已移动 ${moved.length} 条收藏。\n整理前备份：${archive.filename}${core.archiveCleanupMessage(cleanup)}\n如不满意，可在“操作记录”中撤销。`, 'success');
+      setMessage(result, '正在校验、备份并执行移动…');
+      const response = await background({ command: 'plan.apply', planToken, confirmed: true });
       clearPlan();
+      setMessage(result, `整理完成：已移动并核验 ${response.movedCount} 条收藏。\n整理前备份：${response.backup.filename}`, 'success');
       scan = await scanBookmarks();
       renderScan(scan);
       await Promise.all([refreshOverview(), refreshArchives(), renderHistory()]);
     } catch (error) {
-      if (moved.length && archive && !operationSaved) {
-        await operationStore.add({
-          id: operationId(),
-          createdAt: new Date().toISOString(),
-          status: 'partial',
-          archivePath: archive.filename,
-          moves: moved
-        });
-        await renderHistory();
-      }
       clearPlan();
-      setMessage(result, `执行中断：${error.message}${moved.length ? `\n已有 ${moved.length} 条完成移动，可在“操作记录”中撤销。` : ''}`, 'error');
+      setMessage(result, `执行中断：${error.message}。请查看操作记录，不要直接重复执行。`, 'error');
+      await renderHistory();
     } finally {
       backupButton.disabled = false;
       applyButton.disabled = !validatedPlan;
@@ -537,7 +455,7 @@
       setMessage(result, '当前没有可清除的操作记录。');
       return;
     }
-    await operationStore.save([]);
+    await background({ command: 'operations.clear' });
     await renderHistory();
     setMessage(result, '操作记录已清空；收藏夹和备份文件没有改变。', 'success');
   });
