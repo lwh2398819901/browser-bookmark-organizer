@@ -28,6 +28,8 @@ button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled { cursor: not-allowed; opacity: .48; }
 button.primary { border-color: var(--accent); background: var(--accent); color: white; }
 button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+button.primary.danger { border-color: #b42318; background: transparent; color: #b42318; }
+button.primary.danger:hover:not(:disabled) { background: #b42318; color: white; }
 .text-button { min-height: 28px; border: 0; padding: 3px 5px; color: var(--accent); background: transparent; }
 .close-button { width: 28px; min-height: 28px; border: 0; padding: 0; background: transparent; color: var(--muted); font-size: 20px; font-weight: 400; }
 .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin: 7px 0; }

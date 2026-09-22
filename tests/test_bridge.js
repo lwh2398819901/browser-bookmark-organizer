@@ -474,6 +474,18 @@ function send(context, request, token = 'test-secret', senderUrl = 'http://127.0
   assert.equal(nested.findNode('51'), null);
   assert.equal(nested.findNode('52'), null);
   assert.ok(nested.findNode('54'));
+  nested.findNode('1').children.push({ id: '60', parentId: '1', index: nested.findNode('1').children.length, title: '稍后阅读', children: [] });
+  nested.findNode('50').children.push({ id: '61', parentId: '50', index: nested.findNode('50').children.length, title: '空壳', children: [] });
+  const everywhere = await send(nested, { command: 'folders.prune', empty: true });
+  assert.ok(everywhere.result.preview.some(item => item.title === '稍后阅读'));
+  assert.ok(everywhere.result.preview.some(item => item.title === '空壳'));
+  const scoped = await send(nested, { command: 'folders.prune', empty: true, path: '收藏夹栏/资料' });
+  assert.equal(scoped.result.preview.length, 1, JSON.stringify(scoped.result.preview));
+  assert.equal(scoped.result.preview[0].title, '空壳');
+  assert.equal(scoped.result.preview[0].fromPath, '收藏夹栏/资料');
+  const kept = await send(nested, { command: 'folders.prune', empty: true, exclude: ['收藏夹栏/稍后阅读'] });
+  assert.ok(kept.result.preview.some(item => item.title === '空壳'));
+  assert.ok(!kept.result.preview.some(item => item.title === '稍后阅读'));
 
   console.log('Local Agent bridge checks passed (including failure, concurrency and recovery scenarios).');
 })().catch(error => {

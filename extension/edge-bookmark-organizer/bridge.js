@@ -662,7 +662,7 @@ importScripts('shared.js', 'bridge-config.js');
       }
       return raw;
     }
-    const selected = [];
+    if (request.empty) return emptyFolderPlan(scan, request);
     if (request.path) {
       const folder = folderByPath(scan, request.path);
       rejectProtected(folder);
@@ -673,13 +673,26 @@ importScripts('shared.js', 'bridge-config.js');
       const action = request.purge || folder.bookmarkCount === 0 ? 'purgeFolder' : 'deleteFolder';
       return [{ id: folder.id, action }];
     }
-    if (!request.empty) throw new Error('清理目录需要 --empty 或 --path。');
-    const candidates = barFolders(scan).filter(folder => !folder.protected && folder.bookmarkCount === 0);
+    throw new Error('清理目录需要 --empty 或 --path。');
+  }
+
+  function pathCovers(folderPath, rootPath) {
+    return folderPath === rootPath || folderPath.startsWith(`${rootPath}/`);
+  }
+
+  function emptyFolderPlan(scan, request) {
+    let candidates = barFolders(scan).filter(folder => !folder.protected && folder.bookmarkCount === 0);
+    if (request.path) {
+      const root = folderByPath(scan, request.path);
+      candidates = candidates.filter(folder => pathCovers(folder.path, root.path));
+    }
+    const excluded = (Array.isArray(request.exclude) ? request.exclude : []).filter(Boolean)
+      .map(value => canonicalParts(scan, value, 2).join('/'));
+    candidates = candidates.filter(folder => !excluded.some(path => pathCovers(folder.path, path)));
     const picked = request.recursive
       ? candidates.filter(folder => !candidates.some(other => folder.path.startsWith(`${other.path}/`)))
       : candidates.filter(folder => folder.isEmpty);
-    selected.push(...picked);
-    return selected.map(folder => ({ id: folder.id, action: 'purgeFolder' }));
+    return picked.map(folder => ({ id: folder.id, action: 'purgeFolder' }));
   }
 
   async function prepareAndMaybeApply(command, request, timeoutMs) {

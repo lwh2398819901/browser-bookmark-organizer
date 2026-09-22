@@ -301,8 +301,11 @@ def build_request(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError("撤销会移动书签，必须在用户确认后显式传入 --confirmed。")
         return {"command": "operations.undo", "operationId": args.operation_id, "confirmed": True}
     if args.command == "prune-folders":
-        if bool(args.empty) == bool(args.path):
-            raise RuntimeError("prune-folders 需要且只能指定 --empty 或 --path。")
+        excludes = list(args.exclude or [])
+        if not args.empty and not args.path:
+            raise RuntimeError("prune-folders 需要 --empty 或 --path。")
+        if excludes and not args.empty:
+            raise RuntimeError("--exclude 只和 --empty 一起使用，用来跳过要保留的空目录。")
         if args.move_to and args.purge:
             raise RuntimeError("不能同时指定 --move-to 和 --purge。")
         if args.empty and (args.move_to or args.purge):
@@ -313,6 +316,7 @@ def build_request(args: argparse.Namespace) -> dict[str, Any]:
             "recursive": bool(args.recursive),
             "purge": bool(args.purge),
             "path": args.path,
+            "exclude": excludes,
             "moveTo": args.move_to,
         }, args.confirmed)
     if args.command == "rename-folder":
@@ -391,9 +395,10 @@ def parse_args() -> argparse.Namespace:
     validate.add_argument("--file", default="-", help="方案 JSON 文件；- 表示标准输入")
     validate.add_argument("--purge", action="store_true", help="把方案中的 delete 视为永久删除；默认是移入回收站")
     prune = subparsers.add_parser("prune-folders", parents=[common])
-    prune.add_argument("--empty", action="store_true", help="清理没有子项的空目录")
+    prune.add_argument("--empty", action="store_true", help="清理空目录；与 --path 一起使用时只清理该目录之内")
     prune.add_argument("--recursive", action="store_true", help="连同只包含空目录的父目录一起清理，或允许处理非空目录")
-    prune.add_argument("--path", help="要处理的目录路径，例如 收藏夹栏/资料/旧目录")
+    prune.add_argument("--path", help="单独使用时处理这一处；与 --empty 一起使用时只清理它下面的空目录")
+    prune.add_argument("--exclude", action="append", default=[], help="配合 --empty，跳过该路径及其子目录。可重复")
     prune.add_argument("--move-to", help="把 --path 指定的目录整棵移到该父目录，而不是删除")
     prune.add_argument("--purge", action="store_true", help="永久删除 --path 指定的目录；空目录清理本身就会删除空壳")
     prune.add_argument("--confirmed", action="store_true", help="用户已确认上一份预览后执行；省略时只返回预览和 planToken")

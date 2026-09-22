@@ -180,6 +180,24 @@ class BridgePageTests(unittest.TestCase):
         self.assertTrue(request["empty"])
         self.assertTrue(request["recursive"])
         self.assertNotIn("confirmed", request)
+        self.assertEqual(request["exclude"], [])
+
+    def test_empty_prune_accepts_subtree_and_exclusions(self):
+        with patch.object(sys, "argv", [
+            "bookmarkctl.py", "prune-folders", "--empty", "--path", "收藏夹栏/资料",
+            "--exclude", "收藏夹栏/稍后阅读", "--exclude", "收藏夹栏/待删除",
+        ]):
+            args = bookmarkctl.parse_args()
+        request = bookmarkctl.build_request(args)
+        self.assertTrue(request["empty"])
+        self.assertEqual(request["path"], "收藏夹栏/资料")
+        self.assertEqual(request["exclude"], ["收藏夹栏/稍后阅读", "收藏夹栏/待删除"])
+
+    def test_exclude_requires_empty_prune(self):
+        with patch.object(sys, "argv", ["bookmarkctl.py", "prune-folders", "--path", "收藏夹栏/待删除", "--exclude", "收藏夹栏/稍后阅读"]):
+            args = bookmarkctl.parse_args()
+        with self.assertRaises(RuntimeError):
+            bookmarkctl.build_request(args)
         with patch.object(sys, "argv", ["bookmarkctl.py", "rename-folder", "--path", "收藏夹栏/开发", "--name", "工程", "--confirmed"]):
             confirmed = bookmarkctl.parse_args()
         self.assertTrue(bookmarkctl.build_request(confirmed)["confirmed"])

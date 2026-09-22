@@ -123,6 +123,14 @@ function makeEnvironment(currentUrl = 'https://new.example.test/article') {
           reindex(parent);
           return node;
         },
+        remove: async id => {
+          const node = findNode(id);
+          if (!node) throw new Error(`Can't find bookmark for id: ${id}`);
+          if ((node.children || []).length) throw new Error("Can't remove non-empty folder");
+          const parent = findNode(node.parentId);
+          parent.children.splice(node.index, 1);
+          reindex(parent);
+        },
         move: async (id, destination) => {
           const node = findNode(id);
           const oldParent = findNode(node.parentId);
@@ -280,6 +288,28 @@ async function testPopupDuplicateGuard() {
   if (context.chrome.tabs.created.some(item => item.url.endsWith('manager.html?action=backup'))) throw new Error('Popup backup opened an unnecessary manager tab.');
 }
 
+async function testPopupUnbookmark() {
+  const context = makeEnvironment('https://example.test/?b=2&a=1&utm_source=x');
+  load(context, extensionFile('shared.js'));
+  vm.runInContext(fs.readFileSync(extensionFile('popup.js'), 'utf8'), context);
+  await tick();
+  const button = context.elements.get('#add-temporary');
+  if (button.disabled || button.textContent !== '取消收藏') {
+    throw new Error(`Bookmarked page did not offer unbookmark: ${button.textContent}`);
+  }
+  if (!context.elements.get('#page-state').textContent.includes('已经收藏')) {
+    throw new Error('Bookmarked page did not show its existing location.');
+  }
+  await button.listeners.click();
+  const remaining = context.BookmarkOrganizerCore.collectBookmarks(context.tree).bookmarks;
+  if (remaining.some(item => item.canonical === context.BookmarkOrganizerCore.canonicalUrl('https://example.test/?a=1&b=2'))) {
+    throw new Error('Unbookmark left the current page saved.');
+  }
+  if (button.textContent !== '加入“临时收藏”' || !context.elements.get('#page-state').textContent.includes('已取消收藏')) {
+    throw new Error(`Unbookmark did not return to the add state: ${button.textContent} / ${context.elements.get('#page-state').textContent}`);
+  }
+}
+
 async function testUndoRestoresOriginalOrder() {
   const context = makeEnvironment();
   const temporary = context.findNode('9');
@@ -355,6 +385,7 @@ async function testUndoSkipsDeletedBookmarks() {
 (async () => {
   await testManager();
   await testPopupDuplicateGuard();
+  await testPopupUnbookmark();
   await testUndoRestoresOriginalOrder();
   await testUndoSkipsDeletedBookmarks();
   await testLocalizedBookmarkBar();

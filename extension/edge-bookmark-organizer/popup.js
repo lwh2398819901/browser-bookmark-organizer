@@ -15,6 +15,7 @@
   const openManagerButton = document.querySelector('#open-manager');
   const closePopupButton = document.querySelector('#close-popup');
   let currentTab = null;
+  let buttonMode = 'add';
 
   function setState(element, text, kind = '') {
     element.textContent = text;
@@ -25,6 +26,23 @@
     const counts = new Map();
     for (const bookmark of bookmarks) counts.set(bookmark.canonical, (counts.get(bookmark.canonical) || 0) + 1);
     return [...counts.values()].filter(count => count > 1).length;
+  }
+
+  function matchingBookmarks(bookmarks, url) {
+    const canonical = core.canonicalUrl(url);
+    return bookmarks.filter(item => item.canonical === canonical);
+  }
+
+  function locationSummary(existing) {
+    const paths = existing.slice(0, 2).map(item => item.path.slice(0, -1).join(' / ')).join('；');
+    return existing.length > 2 ? `已经收藏 ${existing.length} 处：${paths}` : `已经收藏：${paths}`;
+  }
+
+  function setBookmarkButton(mode) {
+    buttonMode = mode;
+    addButton.textContent = mode === 'remove' ? '取消收藏' : '加入“临时收藏”';
+    addButton.className = mode === 'remove' ? 'primary danger' : 'primary';
+    addButton.disabled = false;
   }
 
   function bookmarksInside(node) {
@@ -55,20 +73,35 @@
     pageUrl.textContent = currentTab?.url || '';
     if (!currentTab?.url || !/^https?:/i.test(currentTab.url)) {
       setState(pageState, '当前页面不能加入收藏夹。', 'error');
+      setBookmarkButton('add');
       addButton.disabled = true;
       return;
     }
     const { collected } = await refreshSummary();
-    const canonical = core.canonicalUrl(currentTab.url);
-    const existing = collected.bookmarks.filter(item => item.canonical === canonical);
+    const existing = matchingBookmarks(collected.bookmarks, currentTab.url);
     if (existing.length) {
-      const paths = existing.slice(0, 2).map(item => item.path.slice(0, -1).join(' / ')).join('；');
-      setState(pageState, `已经收藏：${paths}`, 'success');
-      addButton.disabled = true;
+      setState(pageState, locationSummary(existing), 'success');
+      setBookmarkButton('remove');
       return;
     }
     setState(pageState, '尚未收藏。');
-    addButton.disabled = false;
+    setBookmarkButton('add');
+  }
+
+  async function removeCurrentBookmarks() {
+    addButton.disabled = true;
+    setState(pageState, '正在取消收藏…');
+    const roots = await chrome.bookmarks.getTree();
+    const matches = matchingBookmarks(core.collectBookmarks(roots).bookmarks, currentTab.url);
+    if (!matches.length) {
+      setState(pageState, '尚未收藏。');
+      setBookmarkButton('add');
+      return;
+    }
+    for (const item of matches) await chrome.bookmarks.remove(item.id);
+    setState(pageState, matches.length > 1 ? `已取消 ${matches.length} 处收藏。` : '已取消收藏。', 'success');
+    setBookmarkButton('add');
+    await refreshSummary();
   }
 
   async function ensureTemporaryFolder(roots) {
@@ -81,14 +114,18 @@
 
   addButton.addEventListener('click', async () => {
     try {
+      if (buttonMode === 'remove') {
+        await removeCurrentBookmarks();
+        return;
+      }
       addButton.disabled = true;
       setState(pageState, '正在检查并收藏…');
       const roots = await chrome.bookmarks.getTree();
       const collected = core.collectBookmarks(roots);
-      const canonical = core.canonicalUrl(currentTab.url);
-      const existing = collected.bookmarks.find(item => item.canonical === canonical);
-      if (existing) {
-        setState(pageState, `已经收藏：${existing.path.slice(0, -1).join(' / ')}`, 'success');
+      const existing = matchingBookmarks(collected.bookmarks, currentTab.url);
+      if (existing.length) {
+        setState(pageState, locationSummary(existing), 'success');
+        setBookmarkButton('remove');
         return;
       }
       const temporary = await ensureTemporaryFolder(roots);
@@ -101,7 +138,7 @@
       await refreshSummary();
       window.close();
     } catch (error) {
-      setState(pageState, `收藏失败：${error.message}`, 'error');
+      setState(pageState, `${buttonMode === 'remove' ? '取消收藏失败' : '收藏失败'}：${error.message}`, 'error');
       addButton.disabled = false;
     }
   });
