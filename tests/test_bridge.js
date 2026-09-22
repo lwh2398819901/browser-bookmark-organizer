@@ -68,9 +68,36 @@ function makeEnvironment({ serviceWorker = false } = {}) {
         getChildren: async id => findNode(id)?.children || [],
         create: async options => {
           const parent = findNode(options.parentId);
-          const node = { id: String(nextId++), parentId: parent.id, index: parent.children.length, title: options.title, children: [] };
-          parent.children.push(node);
+          if (!parent || parent.url) throw new Error(`Can't create bookmark under ${options.parentId}`);
+          const node = { id: String(nextId++), parentId: parent.id, title: options.title };
+          if (options.url) node.url = options.url;
+          else node.children = [];
+          const index = Number.isInteger(options.index) ? Math.min(Math.max(options.index, 0), parent.children.length) : parent.children.length;
+          parent.children.splice(index, 0, node);
+          reindex(parent);
           return node;
+        },
+        update: async (nodeId, changes) => {
+          const node = findNode(nodeId);
+          if (!node) throw new Error(`Can't find bookmark for id: ${nodeId}`);
+          if (Object.prototype.hasOwnProperty.call(changes, 'title')) node.title = changes.title;
+          if (Object.prototype.hasOwnProperty.call(changes, 'url')) node.url = changes.url;
+          return node;
+        },
+        remove: async nodeId => {
+          const node = findNode(nodeId);
+          if (!node) throw new Error(`Can't find bookmark for id: ${nodeId}`);
+          if ((node.children || []).length) throw new Error("Can't remove non-empty folder");
+          const parent = findNode(node.parentId);
+          parent.children.splice(node.index, 1);
+          reindex(parent);
+        },
+        removeTree: async nodeId => {
+          const node = findNode(nodeId);
+          if (!node) throw new Error(`Can't find bookmark for id: ${nodeId}`);
+          const parent = findNode(node.parentId);
+          parent.children.splice(node.index, 1);
+          reindex(parent);
         },
         move: async (id, destination) => {
           const node = findNode(id);
@@ -352,6 +379,102 @@ function send(context, request, token = 'test-secret', senderUrl = 'http://127.0
   hung.downloads[0].state = 'interrupted';
   hung.downloads[0].error = 'FILE_ACCESS_DENIED';
   await assert.rejects(hung.BookmarkOrganizerCore.waitForDownload(123, 5), error => error.code === 'ARCHIVE_INTERRUPTED' && error.details.download.error === 'FILE_ACCESS_DENIED');
+
+  const maintenance = boot();
+  const firstScan = await send(maintenance, { command: 'scan', scope: 'all' });
+  const secondScan = await send(maintenance, { command: 'scan', scope: 'all' });
+  assert.equal(firstScan.result.checksum, secondScan.result.checksum);
+  assert.ok(firstScan.result.folders.some(folder => folder.path === '收藏夹栏/开发' && folder.isEmpty && folder.id === '11'));
+  assert.equal(firstScan.result.folders.find(folder => folder.path === '收藏夹栏/临时收藏').protected, true);
+  const lifetime = Date.parse(firstScan.result.scannedAt);
+  assert.ok(Number.isFinite(lifetime));
+  const emptyPreview = await send(maintenance, { command: 'folders.prune', empty: true });
+  assert.equal(emptyPreview.result.moveCount, 1);
+  assert.equal(emptyPreview.result.preview[0].id, '11');
+  assert.equal(emptyPreview.result.preview[0].action, 'purgeFolder');
+  const tokenLifetime = Date.parse(emptyPreview.result.expiresAt) - Date.now();
+  assert.ok(tokenLifetime > 29 * 60 * 1000 && tokenLifetime < 31 * 60 * 1000);
+  const pruned = await send(maintenance, { command: 'folders.prune', empty: true, confirmed: true });
+  assert.equal(pruned.ok, true, JSON.stringify(pruned));
+  assert.equal(maintenance.findNode('11'), null);
+  const pruneUndo = await send(maintenance, { command: 'operations.undo', operationId: pruned.result.operationId, confirmed: true });
+  assert.equal(pruneUndo.ok, true, JSON.stringify(pruneUndo));
+  assert.equal(maintenance.findNode('1').children.some(child => child.title === '开发' && !child.url), true);
+  const listed = await send(maintenance, { command: 'operations.list', type: 'prune' });
+  assert.equal(listed.result.operations.length, 1);
+  assert.equal((await send(maintenance, { command: 'operations.list', type: 'rename' })).result.operations.length, 0);
+
+  const renamePreview = await send(maintenance, { command: 'folders.rename', path: '收藏夹栏/开发', name: '工程' });
+  assert.equal(renamePreview.result.preview[0].name, '工程');
+  const renamed = await send(maintenance, { command: 'folders.rename', path: '收藏夹栏/开发', name: '工程', confirmed: true });
+  assert.equal(renamed.ok, true, JSON.stringify(renamed));
+  assert.equal(maintenance.findNode('1').children.find(child => !child.url && child.title === '工程').id !== undefined, true);
+  const renameUndo = await send(maintenance, { command: 'operations.undo', operationId: renamed.result.operationId, confirmed: true });
+  assert.equal(renameUndo.ok, true, JSON.stringify(renameUndo));
+  assert.ok(maintenance.findNode('1').children.some(child => child.title === '开发'));
+  const protectedRename = await send(maintenance, { command: 'folders.rename', path: '收藏夹栏/临时收藏', name: '收件箱' });
+  assert.equal(protectedRename.ok, false);
+  assert.match(protectedRename.error, /不能对/);
+
+  maintenance.findNode('1').children.push({ id: '40', parentId: '1', index: maintenance.findNode('1').children.length, title: '前端', children: [] });
+  await send(maintenance, { command: 'folders.move', path: '收藏夹栏/开发', to: '收藏夹栏', index: -1 });
+  const movedFolder = await send(maintenance, { command: 'folders.move', path: '收藏夹栏/开发', to: '收藏夹栏', index: -1, confirmed: true });
+  assert.equal(movedFolder.ok, true, JSON.stringify(movedFolder));
+  const barChildren = maintenance.findNode('1').children;
+  assert.equal(barChildren[barChildren.length - 1].title, '开发');
+  const folderUndo = await send(maintenance, { command: 'operations.undo', operationId: movedFolder.result.operationId, confirmed: true });
+  assert.equal(folderUndo.ok, true, JSON.stringify(folderUndo));
+
+  const soft = boot();
+  const softPlan = await send(soft, { command: 'plan.validate', plan: [{ id: '10', action: 'delete' }] });
+  assert.equal(softPlan.result.preview[0].effect, '移入回收站');
+  assert.equal(softPlan.result.preview[0].folderPath, '收藏夹栏/回收站');
+  const softApply = await send(soft, { command: 'plan.apply', planToken: softPlan.result.planToken, confirmed: true });
+  assert.equal(softApply.ok, true, JSON.stringify(softApply));
+  assert.equal(soft.findNode(soft.findNode('10').parentId).title, '回收站');
+  const recyclePreview = await send(soft, { command: 'recycle.purge', olderThanDays: null });
+  assert.equal(recyclePreview.result.preview.length, 1);
+  assert.equal(recyclePreview.result.preview[0].id, '10');
+  assert.equal(recyclePreview.result.preview[0].action, 'purge');
+  const softUndo = await send(soft, { command: 'operations.undo', operationId: softApply.result.operationId, confirmed: true });
+  assert.equal(softUndo.ok, true, JSON.stringify(softUndo));
+  assert.equal(soft.findNode('10').parentId, '9');
+
+  const purged = boot();
+  const purgePlan = await send(purged, { command: 'plan.validate', purge: true, plan: [{ id: '10', action: 'delete' }] });
+  assert.equal(purgePlan.result.preview[0].action, 'purge');
+  const purgeApply = await send(purged, { command: 'plan.apply', planToken: purgePlan.result.planToken, confirmed: true });
+  assert.equal(purgeApply.ok, true, JSON.stringify(purgeApply));
+  assert.equal(purged.findNode('10'), null);
+  const purgeUndo = await send(purged, { command: 'operations.undo', operationId: purgeApply.result.operationId, confirmed: true });
+  assert.equal(purgeUndo.ok, true, JSON.stringify(purgeUndo));
+  assert.ok(purged.findNode('9').children.some(child => child.url === 'https://example.test/git' && child.title === 'Git 教程'));
+
+  const nested = boot();
+  nested.findNode('1').children.push({
+    id: '50', parentId: '1', index: 2, title: '资料', children: [
+      { id: '51', parentId: '50', index: 0, title: '编程语言', children: [
+        { id: '52', parentId: '51', index: 0, title: 'c', children: [] }
+      ] },
+      { id: '53', parentId: '50', index: 1, title: '笔记', children: [
+        { id: '54', parentId: '53', index: 0, title: '记录', url: 'https://example.test/note' }
+      ] }
+    ]
+  });
+  const leaves = await send(nested, { command: 'folders.prune', empty: true });
+  assert.ok(leaves.result.preview.some(item => item.title === 'c'));
+  assert.ok(!leaves.result.preview.some(item => item.title === '编程语言'));
+  const recursive = await send(nested, { command: 'folders.prune', empty: true, recursive: true });
+  assert.ok(recursive.result.preview.some(item => item.title === '编程语言'));
+  assert.ok(!recursive.result.preview.some(item => item.title === 'c'));
+  const blocked = await send(nested, { command: 'folders.prune', path: '收藏夹栏/资料/笔记' });
+  assert.match(blocked.error, /目录非空/);
+  const recursiveApply = await send(nested, { command: 'folders.prune', empty: true, recursive: true, confirmed: true });
+  assert.equal(recursiveApply.ok, true, JSON.stringify(recursiveApply));
+  assert.equal(nested.findNode('51'), null);
+  assert.equal(nested.findNode('52'), null);
+  assert.ok(nested.findNode('54'));
+
   console.log('Local Agent bridge checks passed (including failure, concurrency and recovery scenarios).');
 })().catch(error => {
   console.error(error);

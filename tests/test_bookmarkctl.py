@@ -172,6 +172,34 @@ class BridgePageTests(unittest.TestCase):
         self.assertEqual(payload["token"], "token-value")
         self.assertEqual(payload["request"], request)
 
+    def test_directory_commands_preview_until_confirmed(self):
+        with patch.object(sys, "argv", ["bookmarkctl.py", "prune-folders", "--empty", "--recursive"]):
+            preview = bookmarkctl.parse_args()
+        request = bookmarkctl.build_request(preview)
+        self.assertEqual(request["command"], "folders.prune")
+        self.assertTrue(request["empty"])
+        self.assertTrue(request["recursive"])
+        self.assertNotIn("confirmed", request)
+        with patch.object(sys, "argv", ["bookmarkctl.py", "rename-folder", "--path", "收藏夹栏/开发", "--name", "工程", "--confirmed"]):
+            confirmed = bookmarkctl.parse_args()
+        self.assertTrue(bookmarkctl.build_request(confirmed)["confirmed"])
+
+    def test_validate_plan_purge_is_opt_in(self):
+        with patch.object(bookmarkctl, "read_plan", return_value=[{"id": "1", "action": "delete"}]):
+            request = bookmarkctl.build_request(SimpleNamespace(command="validate-plan", scope="all", file="plan.json", purge=True))
+        self.assertTrue(request["purge"])
+        self.assertEqual(request["plan"][0]["action"], "delete")
+
+    def test_markdown_preview_mentions_token(self):
+        text = bookmarkctl.markdown_view({
+            "preview": [{"action": "delete", "title": "旧页面", "fromPath": "收藏夹栏/临时收藏", "folderPath": "收藏夹栏/回收站", "effect": "移入回收站"}],
+            "planToken": "token-1",
+            "lifetimeMinutes": 30,
+        })
+        self.assertIn("旧页面", text)
+        self.assertIn("token-1", text)
+        self.assertIn("尚未执行", text)
+
 
 class BridgeHandlerTests(unittest.TestCase):
     def setUp(self):

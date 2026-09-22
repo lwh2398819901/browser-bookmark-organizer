@@ -2,6 +2,7 @@
   'use strict';
 
   const temporaryFolderName = '临时收藏';
+  const recycleFolderName = '回收站';
   const archiveDirectory = 'Bookmark-Organizer-Archives';
   const archivePrefix = 'bookmark-archive-';
   const maxArchives = 30;
@@ -57,13 +58,18 @@
 
   function planSignature(plan) {
     return JSON.stringify(plan.map(item => ({
+      action: item.action || 'move',
       id: item.id,
-      folderPath: item.folderPath,
+      folderPath: item.folderPath || null,
       title: item.title,
-      url: item.url,
+      url: item.url || null,
       fromParentId: item.fromParentId,
       fromIndex: item.fromIndex,
-      fromPath: item.fromPath
+      fromPath: item.fromPath,
+      name: item.name || null,
+      toParentPath: item.toParentPath || null,
+      toIndex: Number.isInteger(item.toIndex) ? item.toIndex : null,
+      snapshot: item.snapshot || null
     })));
   }
 
@@ -89,9 +95,12 @@
     const existing = new Set(existingPaths);
     const missing = new Set();
     for (const item of plan) {
-      for (let length = 2; length <= item.folderPath.length; length += 1) {
-        const path = item.folderPath.slice(0, length).join('/');
-        if (!existing.has(path)) missing.add(path);
+      const targets = [item.folderPath, item.toParentPath].filter(path => Array.isArray(path));
+      for (const target of targets) {
+        for (let length = 2; length <= target.length; length += 1) {
+          const path = target.slice(0, length).join('/');
+          if (!existing.has(path)) missing.add(path);
+        }
       }
     }
     return [...missing];
@@ -115,11 +124,19 @@
             index: node.index,
             title: node.title,
             url: node.url,
+            dateAdded: node.dateAdded ?? null,
             canonical: canonicalUrl(node.url),
             path
           });
         } else if (String(node.id || '') !== '0') {
-          folders.push({ id: node.id, parentId: node.parentId, title: node.title, path });
+          folders.push({
+            id: node.id,
+            parentId: node.parentId,
+            index: node.index,
+            title: node.title,
+            dateAdded: node.dateAdded ?? null,
+            path
+          });
         }
       });
     }
@@ -395,6 +412,49 @@
     }
   }
 
+  function describeFolders(folders, bookmarks) {
+    return folders.map(folder => {
+      const parts = folder.path;
+      const bookmarkCount = bookmarks.filter(item => {
+        const parent = item.path.slice(0, -1);
+        return parent.length >= parts.length && parts.every((part, index) => parent[index] === part);
+      }).length;
+      const childFolderCount = folders.filter(other =>
+        other.path.length === parts.length + 1 && parts.every((part, index) => other.path[index] === part)
+      ).length;
+      return {
+        id: folder.id,
+        parentId: folder.parentId,
+        index: folder.index,
+        title: folder.title,
+        dateAdded: folder.dateAdded ?? null,
+        pathParts: parts,
+        path: parts.join('/'),
+        bookmarkCount,
+        childFolderCount,
+        isEmpty: bookmarkCount === 0 && childFolderCount === 0,
+        protected: parts.includes(temporaryFolderName) || parts.includes(recycleFolderName)
+      };
+    });
+  }
+
+  function treeChecksum(folders, bookmarks) {
+    const lines = [
+      ...folders.map(folder => `f\t${folder.id}\t${folder.index}\t${folder.path.join('/')}`),
+      ...bookmarks.map(item => `b\t${item.id}\t${item.index}\t${item.path.join('/')}\t${item.url}`)
+    ].sort();
+    let hash = 5381;
+    const text = lines.join('\n');
+    for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash, 33) ^ text.charCodeAt(index);
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  }
+
+  function snapshotNode(node) {
+    if (!node) return null;
+    if (node.url) return { title: node.title || '', url: node.url };
+    return { title: node.title || '', children: (node.children || []).map(snapshotNode) };
+  }
+
   function createOperationStore(storageKey, maxHistory) {
     async function load() {
       const stored = await chrome.storage.local.get({ [storageKey]: [] });
@@ -416,6 +476,7 @@
 
   global.BookmarkOrganizerCore = {
     temporaryFolderName,
+    recycleFolderName,
     archiveDirectory,
     archivePrefix,
     maxArchives,
@@ -442,6 +503,9 @@
     formatDate,
     formatBytes,
     bookmarkExists,
+    describeFolders,
+    treeChecksum,
+    snapshotNode,
     createOperationStore
   };
 })(globalThis);

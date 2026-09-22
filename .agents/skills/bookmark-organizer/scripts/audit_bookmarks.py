@@ -301,6 +301,27 @@ def classify_item(item: dict[str, Any], rules: dict[str, tuple[str, ...]], fallb
     return winners[0] if len(winners) == 1 else "混合／待判断"
 
 
+def folder_health(items: list[dict[str, Any]], folders: set[tuple[str, ...]]) -> dict[str, Any]:
+    counts: Counter[tuple[str, ...]] = Counter()
+    for item in items:
+        path = tuple(item["path"])
+        for length in range(1, len(path) + 1):
+            counts[path[:length]] += 1
+    empty = ["/".join(path) for path in sorted(folders) if counts[path] == 0]
+    sparse = [
+        {"path": "/".join(path), "bookmark_count": counts[path]}
+        for path in sorted(folders)
+        if 0 < counts[path] <= 2
+    ]
+    return {
+        "empty_folder_count": len(empty),
+        "empty_folders": empty,
+        "sparse_folder_count": len(sparse),
+        "sparse_folders": sparse,
+        "bookmarks_per_folder": round(len(items) / max(1, len(folders)), 2),
+    }
+
+
 def collection_overview(items: list[dict[str, Any]], domains: Counter[str]) -> dict[str, Any]:
     folders: dict[str, list[dict[str, Any]]] = defaultdict(list)
     content_types: Counter[str] = Counter()
@@ -403,7 +424,8 @@ def profile_html(audit: dict[str, Any]) -> str:
         f"前五个来源占全部收藏的 {structure['top_five_domain_share_percent']}%，可用于判断来源是否过度集中。",
     ]
     coverage = audit.get('link_coverage', {})
-    quality = [("精确重复链接", stats["duplicate_group_count"]), ("同页不同章节／参数", stats["related_url_group_count"]), ("链接可用", link.get("available", 0)), ("链接不可用", link.get("unavailable", 0)), ("需要人工复核", link.get("unverified", 0)), ("相较基线有变化", len(audit["changes"])), ("采集到标题的链接", coverage.get('titles_captured', 0)), ("具备前后标题、可比较的链接（缺失不代表未变化）", coverage.get('title_comparable', 0))]
+    health = audit.get("folder_health", {})
+    quality = [("精确重复链接", stats["duplicate_group_count"]), ("同页不同章节／参数", stats["related_url_group_count"]), ("空目录", health.get("empty_folder_count", 0)), ("条目不超过 2 的目录", health.get("sparse_folder_count", 0)), ("链接可用", link.get("available", 0)), ("链接不可用", link.get("unavailable", 0)), ("需要人工复核", link.get("unverified", 0)), ("相较基线有变化", len(audit["changes"])), ("采集到标题的链接", coverage.get('titles_captured', 0)), ("具备前后标题、可比较的链接（缺失不代表未变化）", coverage.get('title_comparable', 0))]
     quality_html = "".join(f"<tr><td>{html.escape(label)}</td><td>{count}</td></tr>" for label, count in quality)
     return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>知识版图 · 收藏夹画像</title>
 <style>:root{{--paper:#f5f1e8;--ink:#17221f;--muted:#64736d;--line:#d5d0c4;--green:#1f5b4e;--clay:#a5513a;--gold:#af7a26;--panel:#fcfaf5}}*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 "Microsoft YaHei UI","Noto Sans SC",sans-serif;text-wrap:pretty}}main{{max-width:1180px;margin:auto;padding:30px 32px 64px}}.masthead{{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(260px,.7fr);gap:36px;padding:42px 0 34px;border-bottom:1px solid var(--ink)}}.eyebrow{{margin:0 0 8px;color:var(--green);font-size:12px;letter-spacing:.14em;font-weight:700}}h1,h2,h3{{font-family:"Iowan Old Style","Songti SC",Georgia,serif;line-height:1.12}}h1{{font-size:clamp(42px,7vw,78px);margin:0;letter-spacing:-.05em}}h2{{font-size:28px;margin:0 0 18px}}h3{{font-size:18px;margin:0 0 7px}}p{{margin:0 0 12px}}.masthead aside{{align-self:end;color:var(--muted);font-size:14px}}.cards{{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--line)}}.cards article{{padding:22px 18px 24px 0;border-right:1px solid var(--line)}}.cards article+article{{padding-left:18px}}.cards article:last-child{{border:0}}.cards strong{{display:block;font:44px/1 "Iowan Old Style",Georgia,serif;letter-spacing:-.04em}}.cards span{{color:var(--muted);font-size:13px}}.section{{padding:34px 0;border-bottom:1px solid var(--line)}}.split{{display:grid;grid-template-columns:1fr 1fr;gap:52px}}.bar-row{{margin:0 0 14px}}.bar-row>div{{display:flex;justify-content:space-between;gap:16px;font-size:14px}}.bar-row b{{font-weight:600}}.bar-row i{{display:block;height:5px;background:#e2ddd2;margin-top:7px}}.bar-row em{{display:block;height:100%;background:var(--green)}}.evidence{{padding:20px 22px;background:#e8eee6;border-left:3px solid var(--green)}}.evidence ul{{padding-left:19px;margin:10px 0 0}}.ai-panel{{margin-top:34px;padding:30px 34px;background:var(--ink);color:#f6f2e9}}.ai-panel .eyebrow{{color:#b6d2bd}}.ai-panel .lead{{max-width:850px;font-size:19px;color:#e1e6dd}}.focus-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#405149;margin:28px 0}}.focus-grid article{{background:var(--ink);padding:18px}}.focus-grid p{{color:#d9e1da;font-size:14px}}.focus-grid small,.actions small{{color:#aab8af;font-size:12px}}.ai-columns{{display:grid;grid-template-columns:1fr 1fr;gap:32px;border-top:1px solid #405149;padding-top:22px}}.ai-columns ul,.actions{{margin:8px 0;padding-left:20px}}.actions li{{padding:0 0 12px 6px}}.actions b{{display:block;color:#d9b96f;font-size:12px;letter-spacing:.08em}}.actions span{{display:block}}table{{width:100%;border-collapse:collapse;font-size:14px}}td,th{{padding:11px 0;text-align:left;border-bottom:1px solid var(--line)}}td:last-child,th:last-child{{text-align:right}}.note{{color:var(--muted);font-size:13px;margin-top:16px}}code{{font-family:ui-monospace,Consolas,monospace}}@media(max-width:760px){{main{{padding:18px}}.masthead,.split,.ai-columns{{grid-template-columns:1fr;gap:24px}}.cards{{grid-template-columns:1fr 1fr}}.cards article:nth-child(2){{border-right:0}}.cards article:nth-child(n+3){{border-top:1px solid var(--line)}}.focus-grid{{grid-template-columns:1fr}}.ai-panel{{padding:24px 20px}}}}</style></head><body><main>
@@ -423,6 +445,21 @@ def ai_brief_markdown(audit: dict[str, Any]) -> str:
         lines.append(f"- {key}: {value}")
     if not audit.get("execution", {}).get("runtime_ids_available", False):
         lines.extend(["", "> 当前输入为 HTML 导出，书签没有浏览器运行时 ID。它可用于审计与画像；离线重组暂无正式工具。实时移动计划必须重新使用配套扩展扫描。"])
+    health = audit.get("folder_health") or {}
+    lines.extend(["", "## 目录健康度", "", f"- 空目录: {health.get('empty_folder_count', 0)}", f"- 条目数不超过 2 的目录: {health.get('sparse_folder_count', 0)}", f"- 平均每目录书签: {health.get('bookmarks_per_folder', 0)}", "", "### 空目录", ""])
+    empty_folders = health.get("empty_folders") or []
+    lines.extend(f"- {path}" for path in empty_folders[:80])
+    if len(empty_folders) > 80:
+        lines.append(f"- …另有 {len(empty_folders) - 80} 个空目录，完整列表见 audit.json")
+    if not empty_folders:
+        lines.append("- 无")
+    lines.extend(["", "### 稀疏目录", ""])
+    sparse_folders = health.get("sparse_folders") or []
+    lines.extend(f"- {item['path']}（{item['bookmark_count']}）" for item in sparse_folders[:80])
+    if len(sparse_folders) > 80:
+        lines.append(f"- …另有 {len(sparse_folders) - 80} 个稀疏目录，完整列表见 audit.json")
+    if not sparse_folders:
+        lines.append("- 无")
     lines.extend(["", "## 现有目录样本", ""])
     for theme, samples in overview["folder_samples"].items():
         lines.append(f"### {theme}")
@@ -483,6 +520,7 @@ def run() -> int:
         item["normalized_url"] = normalized_url(item["url"])
         item["exact_url"] = normalized_url(item["url"], keep_fragment=True)
     folder_count = len(folders)
+    health = folder_health(items, folders)
     domains = Counter((urlsplit(item["url"]).hostname or "(无域名)").lower() for item in items)
     topics = Counter((item["path"][1] if len(item["path"]) > 1 else item["path"][0] if item["path"] else "未分类") for item in items)
     overview = collection_overview(items, domains)
@@ -515,7 +553,8 @@ def run() -> int:
             "extension_plan_requires_live_scan": True,
             "note": "HTML exports do not contain browser runtime bookmark IDs; use the companion extension scan before applying a live move plan." if detected_format == "html" else "Runtime IDs came from the Chromium source and must still be refreshed by the companion extension before a live move.",
         },
-        "stats": {"bookmark_count": len(items), "folder_count": folder_count, "folder_count_policy": "输入中命名目录路径数，包含空目录、根目录及临时收藏；同名同路径合并", "duplicate_group_count": len(exact_duplicates), "related_url_group_count": len(related_url_groups)},
+        "stats": {"bookmark_count": len(items), "folder_count": folder_count, "folder_count_policy": "输入中命名目录路径数，包含空目录、根目录及临时收藏；同名同路径合并", "empty_folder_count": health["empty_folder_count"], "sparse_folder_count": health["sparse_folder_count"], "bookmarks_per_folder": health["bookmarks_per_folder"], "duplicate_group_count": len(exact_duplicates), "related_url_group_count": len(related_url_groups)},
+        "folder_health": health,
         "profile": {"top_folders": dict(topics.most_common()), "top_domains": dict(domains.most_common())},
         "collection_overview": overview,
         "ai_insights": insights,

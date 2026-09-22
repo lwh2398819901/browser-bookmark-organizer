@@ -265,19 +265,33 @@ def read_plan(path: str) -> list[dict[str, str]]:
     return plan
 
 
+def confirmed_payload(payload: dict[str, Any], confirmed: bool) -> dict[str, Any]:
+    if confirmed:
+        payload["confirmed"] = True
+    return payload
+
+
 def build_request(args: argparse.Namespace) -> dict[str, Any]:
     if args.command in {"status", "backup"}:
         return {"command": args.command}
     if args.command == "scan":
         return {"command": "scan", "scope": args.scope}
+    if args.command == "folders":
+        return {"command": "folders.list"}
     if args.command == "archives":
         return {"command": "archives.list"}
     if args.command == "downloads":
         return {"command": "downloads.list"}
     if args.command == "operations":
-        return {"command": "operations.list"}
+        request = {"command": "operations.list"}
+        if getattr(args, "type", None):
+            request["type"] = args.type
+        return request
     if args.command == "validate-plan":
-        return {"command": "plan.validate", "scope": args.scope, "plan": read_plan(args.file)}
+        request = {"command": "plan.validate", "scope": args.scope, "plan": read_plan(args.file)}
+        if getattr(args, "purge", False):
+            request["purge"] = True
+        return request
     if args.command == "apply-plan":
         if not args.confirmed:
             raise RuntimeError("执行移动前必须在用户确认预览后显式传入 --confirmed。")
@@ -286,7 +300,70 @@ def build_request(args: argparse.Namespace) -> dict[str, Any]:
         if not args.confirmed:
             raise RuntimeError("撤销会移动书签，必须在用户确认后显式传入 --confirmed。")
         return {"command": "operations.undo", "operationId": args.operation_id, "confirmed": True}
+    if args.command == "prune-folders":
+        if bool(args.empty) == bool(args.path):
+            raise RuntimeError("prune-folders 需要且只能指定 --empty 或 --path。")
+        if args.move_to and args.purge:
+            raise RuntimeError("不能同时指定 --move-to 和 --purge。")
+        if args.empty and (args.move_to or args.purge):
+            raise RuntimeError("清理空目录会直接删除空壳；不使用 --move-to 或 --purge。")
+        return confirmed_payload({
+            "command": "folders.prune",
+            "empty": bool(args.empty),
+            "recursive": bool(args.recursive),
+            "purge": bool(args.purge),
+            "path": args.path,
+            "moveTo": args.move_to,
+        }, args.confirmed)
+    if args.command == "rename-folder":
+        name = args.name.strip()
+        if not name or "/" in name:
+            raise RuntimeError("新目录名不能为空，也不能包含“/”。")
+        return confirmed_payload({"command": "folders.rename", "path": args.path, "name": name}, args.confirmed)
+    if args.command == "move-folder":
+        return confirmed_payload({
+            "command": "folders.move",
+            "path": args.path,
+            "to": args.to,
+            "index": args.index,
+        }, args.confirmed)
+    if args.command == "purge-recycle":
+        if args.older_than_days is not None and args.older_than_days < 0:
+            raise RuntimeError("--older-than-days 不能为负数。")
+        return confirmed_payload({
+            "command": "recycle.purge",
+            "olderThanDays": args.older_than_days,
+        }, args.confirmed)
     raise RuntimeError(f"未知命令：{args.command}")
+
+
+def markdown_view(result: dict[str, Any]) -> str:
+    preview = result.get("preview")
+    if isinstance(preview, list):
+        lines = ["| 动作 | 标题 | 从 | 到 | 说明 |", "|---|---|---|---|---|"]
+        for item in preview:
+            destination = item.get("folderPath") or item.get("to") or item.get("name") or ""
+            detail = item.get("effect") or ""
+            if item.get("bookmarkCount"):
+                detail += f"（{item['bookmarkCount']} 条书签）"
+            lines.append(f"| {item.get('action') or ''} | {item.get('title') or ''} | {item.get('fromPath') or ''} | {destination} | {detail} |")
+        if result.get("operationId"):
+            lines.extend(["", f"已执行，操作记录 `{result['operationId']}`。"])
+        elif result.get("planToken"):
+            lines.extend(["", f"尚未执行。确认预览后使用该计划令牌，或为同一命令加上 `--confirmed`。令牌 `{result['planToken']}`，约 {result.get('lifetimeMinutes', 30)} 分钟内有效。"])
+        elif result.get("message"):
+            lines.extend(["", str(result["message"])])
+        return "\n".join(lines)
+    folders = result.get("folders")
+    if isinstance(folders, list):
+        lines = ["| 路径 | 书签 | 子目录 | 空 | 位置 |", "|---|---:|---:|---|---:|"]
+        for folder in folders:
+            lines.append(
+                f"| {folder.get('path') or ''} | {folder.get('bookmarkCount', 0)} | {folder.get('childFolderCount', 0)} | "
+                f"{'是' if folder.get('isEmpty') else '否'} | {folder.get('index', '')} |"
+            )
+        return "\n".join(lines)
+    return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 def parse_args() -> argparse.Namespace:
@@ -295,19 +372,43 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--browser", choices=("edge", "chrome", "brave"))
     parser.add_argument("--timeout", type=float, default=60.0, help="等待桥接结果的秒数；归档等待预留 10 秒用于取消与回传")
     parser.add_argument("--pretty", action="store_true", help="以缩进 JSON 输出")
+    parser.add_argument("--markdown", action="store_true", help="向标准输出打印 Markdown 表格；--output 仍写入 JSON")
     parser.add_argument("--output", type=Path, help="将成功或失败结果写入无 BOM UTF-8 JSON 文件；路径中的 ~ 会展开")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    # 让 --pretty / --output 也能写在子命令之后；default=SUPPRESS 避免覆盖写在子命令之前的全局值。
+    # 让 --pretty / --output / --markdown 也能写在子命令之后；default=SUPPRESS 避免覆盖写在子命令之前的全局值。
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--pretty", action="store_true", default=argparse.SUPPRESS, help="以缩进 JSON 输出")
+    common.add_argument("--markdown", action="store_true", default=argparse.SUPPRESS, help="向标准输出打印 Markdown 表格；--output 仍写入 JSON")
     common.add_argument("--output", type=Path, default=argparse.SUPPRESS, help="将成功或失败结果写入无 BOM UTF-8 JSON 文件；路径中的 ~ 会展开")
-    for name in ("status", "backup", "archives", "operations", "downloads"):
+    for name in ("status", "backup", "archives", "downloads", "folders"):
         subparsers.add_parser(name, parents=[common])
+    operations = subparsers.add_parser("operations", parents=[common])
+    operations.add_argument("--type", choices=("move", "delete", "prune", "rename", "move-folder", "mixed"))
     scan = subparsers.add_parser("scan", parents=[common])
     scan.add_argument("--scope", choices=("temporary", "all"), default="temporary")
     validate = subparsers.add_parser("validate-plan", parents=[common])
     validate.add_argument("--scope", choices=("temporary", "all"), default="temporary")
     validate.add_argument("--file", default="-", help="方案 JSON 文件；- 表示标准输入")
+    validate.add_argument("--purge", action="store_true", help="把方案中的 delete 视为永久删除；默认是移入回收站")
+    prune = subparsers.add_parser("prune-folders", parents=[common])
+    prune.add_argument("--empty", action="store_true", help="清理没有子项的空目录")
+    prune.add_argument("--recursive", action="store_true", help="连同只包含空目录的父目录一起清理，或允许处理非空目录")
+    prune.add_argument("--path", help="要处理的目录路径，例如 收藏夹栏/资料/旧目录")
+    prune.add_argument("--move-to", help="把 --path 指定的目录整棵移到该父目录，而不是删除")
+    prune.add_argument("--purge", action="store_true", help="永久删除 --path 指定的目录；空目录清理本身就会删除空壳")
+    prune.add_argument("--confirmed", action="store_true", help="用户已确认上一份预览后执行；省略时只返回预览和 planToken")
+    rename = subparsers.add_parser("rename-folder", parents=[common])
+    rename.add_argument("--path", required=True)
+    rename.add_argument("--name", required=True)
+    rename.add_argument("--confirmed", action="store_true")
+    move_folder = subparsers.add_parser("move-folder", parents=[common])
+    move_folder.add_argument("--path", required=True)
+    move_folder.add_argument("--to", required=True, help="目标父目录；收藏夹栏表示栏的根")
+    move_folder.add_argument("--index", type=int, default=-1, help="目标位置，-1 表示末尾")
+    move_folder.add_argument("--confirmed", action="store_true")
+    purge_recycle = subparsers.add_parser("purge-recycle", parents=[common])
+    purge_recycle.add_argument("--older-than-days", type=int)
+    purge_recycle.add_argument("--confirmed", action="store_true")
     apply_plan = subparsers.add_parser("apply-plan", parents=[common])
     apply_plan.add_argument("--plan-token", required=True)
     apply_plan.add_argument("--confirmed", action="store_true")
@@ -344,7 +445,9 @@ def main() -> int:
                 print(json.dumps(result, ensure_ascii=False))
                 print(result["outputError"]["error"], file=sys.stderr)
                 return 1
-        else:
+        if args.markdown:
+            print(markdown_view(result))
+        elif not args.output:
             print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
         return 0
     except (OSError, RuntimeError, ValueError) as error:

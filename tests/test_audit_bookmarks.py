@@ -55,6 +55,9 @@ class AuditBookmarksTests(unittest.TestCase):
         items, folders = audit_bookmarks.chromium_items(payload)
         self.assertFalse(items)
         self.assertEqual(len(folders), 4)
+        health = audit_bookmarks.folder_health(items, folders)
+        self.assertGreaterEqual(health["empty_folder_count"], 3)
+        self.assertEqual(health["bookmarks_per_folder"], 0)
 
     def test_baseline_implicitly_checks_current_links(self):
         source_text = """<!DOCTYPE NETSCAPE-Bookmark-file-1><DL><p>

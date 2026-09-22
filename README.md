@@ -6,9 +6,11 @@
 
 ## 当前范围
 
-当前 2.0.4 只实现本地使用方案：本机 Agent 加载技能，通过短时 localhost 桥接调用本地扩展。它不需要长期开放端口，不连接远端收藏夹服务，也不建设插件内置的云端 Agent。
+当前 2.0.5 只实现本地使用方案：本机 Agent 加载技能，通过短时 localhost 桥接调用本地扩展。它不需要长期开放端口，不连接远端收藏夹服务，也不建设插件内置的云端 Agent。
 
-2.0.4 增加归档下载诊断（`downloads`）、超时取消、逐项操作记录和冲突撤销；CLI 与整理中心共用后台执行器。链接检查使用有读取上限的 GET，显示标题采集与比较覆盖率。全库扫描仍覆盖全部根目录，移动仅支持收藏夹栏内条目。离线 HTML 重组尚未提供正式工具。
+2.0.5 在原有移动闭环上增加软删除、回收站清空、空目录清理、目录重命名和目录移动。删除和目录变更都先给出预览；执行前自动归档，并可通过操作记录撤销。书签默认移入 `回收站`，只有显式 `--purge` 才永久删除。计划令牌有效期为 30 分钟。全库扫描仍覆盖全部根目录，变更仅支持收藏夹栏内条目。离线 HTML 重组尚未提供正式工具。
+
+2.0.4 增加归档下载诊断（`downloads`）、超时取消、逐项操作记录和冲突撤销；CLI 与整理中心共用后台执行器。链接检查使用有读取上限的 GET，显示标题采集与比较覆盖率。
 
 安装检查 `installer/doctor.ps1` 只证明文件与配置一致；加 `-RuntimeCheck` 核对浏览器已加载版本，加 `-ArchiveTest` 会实际创建备份。升级扩展后需要重新加载。协议、错误状态和恢复方式见 [本地 Agent 桥接](docs/local-agent-bridge.md)。
 
@@ -23,6 +25,7 @@
 - 备份与恢复中心：按日期展示最近备份，可定位文件、复制路径并查看安全恢复步骤。
 - 可视化整理与撤销：把 Agent JSON 转换成逐条移动预览；执行前自动备份，并可通过本地操作记录撤销插件完成的移动。
 - Chromium 安全批量移动：通过 `chrome.bookmarks` API 执行经过确认的移动计划；不自动删除、重命名或替换网址。
+- 删除与目录维护：书签默认移入 `回收站`；空目录可清理；目录可重命名和移动。永久删除需要单独确认，执行前都会先归档。
 - Agent 自动接管：实时扫描、备份、方案校验、移动、查看记录和撤销均可通过命令完成，无需复制粘贴或视觉点击插件页面。
 
 ## 快速安装（Windows + Edge）
@@ -67,14 +70,14 @@ python .\.agents\skills\bookmark-organizer\scripts\bookmarkctl.py --pretty scan
 # 单独备份，不修改收藏夹
 python .\.agents\skills\bookmark-organizer\scripts\bookmarkctl.py --pretty backup
 
-# 校验 Agent 生成的移动方案，返回预览和 10 分钟有效的 planToken
+# 校验 Agent 生成的移动方案，返回预览和 30 分钟有效的 planToken
 python .\.agents\skills\bookmark-organizer\scripts\bookmarkctl.py --pretty validate-plan --file .\plan.json
 
 # 用户确认预览后执行；扩展会先备份
 python .\.agents\skills\bookmark-organizer\scripts\bookmarkctl.py --pretty apply-plan --plan-token <token> --confirmed
 ```
 
-还支持 `archives`、`operations` 和 `undo --operation-id <id> --confirmed`。所有输出均为 JSON，Claude Code、Codex、Cursor 或其他能运行本地命令的 Agent 不需要单独适配。插件页面仍可独立完成原有人工操作。
+还支持 `folders`、`prune-folders`、`rename-folder`、`move-folder`、`purge-recycle`、`archives`、`operations` 和 `undo --operation-id <id> --confirmed`。目录命令不带 `--confirmed` 时只返回预览。所有输出均为 JSON，需要给人看的表格可加 `--markdown`。Claude Code、Codex、Cursor 或其他能运行本地命令的 Agent 不需要单独适配。插件页面仍可独立完成原有人工操作。
 
 协议、安全边界与排障见[本地 Agent 桥接](docs/local-agent-bridge.md)。
 
@@ -107,7 +110,8 @@ python installer/install.py --browser edge --update-extension --update-skill
 | `检查重复收藏` | 输出精确重复；章节锚点不会被误删 |
 | `检查失效链接` | 进行网络检查，输出待复核清单 |
 | `生成收藏夹深度画像` | 输出 HTML 事实层与 AI 语义层 |
-| `执行已确认的移动计划` | 通过本地命令让扩展应用计划；不会默认删除 |
+| `执行已确认的移动计划` | 通过本地命令让扩展应用计划；删除默认进入回收站 |
+| `删掉这些空目录` | 先预览空目录，确认后删除并可撤销 |
 
 详细触发词和授权边界见 [工作流说明](docs/workflows.md)。
 

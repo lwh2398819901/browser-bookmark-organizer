@@ -27,8 +27,8 @@ python scripts/bookmarkctl.py --pretty apply-plan --plan-token <token> --confirm
 ```
 
 1. 用扫描响应的 `bookmarks` 生成本次范围内的方案；`temporaryBookmarks` 始终只包含临时收藏。全库可扫描其他根目录，但只有 `movable: true` 的收藏夹栏内书签可移动。已有目标目录以 `existingFolders` 为准。
-2. 方案格式为 `[{"id":"...","folderPath":"..."}]`。ID 只能原样取自本次实时扫描；路径使用浏览器实际的收藏夹栏名称。不同章节锚点不是精确重复。
-3. 校验返回逐条预览和有效期 10 分钟的 `planToken`。用户已明确条目、目标和移动意图，且预览未扩大授权时，可直接执行；否则展示预览并取得一次确认。不得把 `--confirmed` 本身当成用户授权。
+2. 移动方案格式为 `[{"id":"...","folderPath":"..."}]`。软删除写成 `{"id":"...","action":"delete"}`，不写 `folderPath`。ID 只能原样取自本次实时扫描；路径使用浏览器实际的收藏夹栏名称。不同章节锚点不是精确重复。
+3. 校验返回逐条预览和有效期 30 分钟的 `planToken`。重新校验会签发新令牌。用户已明确条目、目标和移动或删除意图，且预览未扩大授权时，可直接执行；否则展示预览并取得一次确认。不得把 `--confirmed` 本身当成用户授权。永久删除只在用户明确要求后，给 `validate-plan` 加 `--purge`。
 4. `apply-plan` 内部完成备份、再次校验、逐项移动和结果核验。成功时读取 `verified`、`moves`、`operationId` 和备份路径，不要求额外扫描。全库整理按目标核验，不要求所有条目原先位于临时收藏。
 5. 归档失败即不移动；中途失败可能部分完成。错误或超时先读操作记录和实际扫描结果，再决定是否恢复；不能盲目重试。新收藏不并入旧计划。
 
@@ -60,10 +60,27 @@ python scripts/audit_bookmarks.py --input <Bookmarks-or-export.html> --output-di
 
 深度画像和语义归档阅读 [动态分类](references/dynamic-classification.md)：优先复用稳定目录，每项建议附理由、证据和置信度；低置信度保留原位或列入待复核。画像的事实与 AI 解读明确区分，不推断敏感个人特质。生成 `ai-insights.json` 后用 `--ai-insights` 渲染。
 
+## 删除与目录
+
+能做：移动书签、把书签软删除到 `回收站`、在明确授权后永久删除、列出目录、删除空目录、重命名目录、移动或排序目录、清空回收站。不能做：修改书签标题或 URL、自动删除 `临时收藏` 或 `回收站`、自动按 30 天清空回收站、删除非空目录而不展示其中的书签数量。
+
+```text
+python scripts/bookmarkctl.py --pretty folders
+python scripts/bookmarkctl.py --pretty prune-folders --empty
+python scripts/bookmarkctl.py --pretty prune-folders --empty --recursive --confirmed
+python scripts/bookmarkctl.py --pretty rename-folder --path "收藏夹栏/资料/CMake与Qt构建" --name "CMake"
+python scripts/bookmarkctl.py --pretty move-folder --path "收藏夹栏/前端技术收藏夹" --to "收藏夹栏" --index -1
+python scripts/bookmarkctl.py --pretty purge-recycle
+```
+
+不带 `--confirmed` 的命令只返回预览和 `planToken`。用户确认的必须是这份预览：原样重跑并加上 `--confirmed`。目录状态若已变化，扩展会拒绝执行并返回新预览。书签方案继续用 `apply-plan --plan-token`。`--empty` 只删除没有任何子项的目录；`--recursive` 会连同“下面只有空目录”的父目录一起删掉。非空目录必须指定 `--path` 和 `--recursive`，预览会写明书签数；默认把整棵目录移入回收站，只有 `--purge` 才永久删除。
+
+`scan` 的 `folders` 含目录 id、路径、书签数、子目录数、是否为空和位置。`scannedAt` 与 `checksum` 用于判断这份扫描是否已过期。审计简报中的目录健康度给出空目录和条目数不超过 2 的目录。
+
 ## 数据与执行边界
 
 - 实时执行器仅限本技能配套的“收藏夹整理助手（本地）”；核验名称、版本和权限。不得直接编辑运行中浏览器的 `Bookmarks`。
 - 保留源导出文件。报告写入用户指定目录，不提交到 Git。离线数据中的 ID 不能用于执行。
-- 扩展不删除书签或目录；仅报告重复。备份保留最近 30 份完成归档，失败下载单独诊断。
-- 撤销通过 CLI 和操作记录恢复原位置，先备份；原目录缺失、内容变化或再次移动等冲突明确报告，不强行覆盖。不会删除整理时新建的空目录。
+- 精确重复只报告，不自动删除。备份保留最近 30 份完成归档，失败下载单独诊断。
+- 撤销通过 CLI 和操作记录恢复原位置，先备份；原目录缺失、内容变化或再次移动等冲突明确报告，不强行覆盖。软删除撤销会把原书签移回。永久删除撤销会重建条目，运行时 ID 会改变。不会删除整理时新建的空目录，包括空的回收站。
 - HTML 导入不等于覆盖式回滚，不自动清空当前收藏夹。

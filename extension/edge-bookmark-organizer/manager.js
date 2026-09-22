@@ -224,12 +224,25 @@
     const temporaryById = new Map(scan.temporaryUrls.map(item => [item.id, item]));
     const seen = new Set();
     return plan.map(item => {
-      if (!item || typeof item.id !== 'string' || typeof item.folderPath !== 'string') throw new Error('每项都需要字符串 id 和 folderPath。');
+      const action = item?.action || 'move';
+      if (!item || typeof item.id !== 'string' || (action === 'move' && typeof item.folderPath !== 'string')) throw new Error('每项都需要字符串 id 和 folderPath。');
+      if (!['move', 'delete', 'purge'].includes(action)) throw new Error(`整理中心不能执行“${action}”。目录操作请使用 bookmarkctl。`);
       const bookmark = temporaryById.get(item.id);
       if (!bookmark) throw new Error(`书签 ${item.id} 不在当前“临时收藏”中。`);
       if (!core.idsUnder(scan.bookmarkBar).has(item.id)) throw new Error('来源位于收藏夹栏之外，仅支持扫描。');
       if (seen.has(item.id)) throw new Error(`书签 ${item.id} 重复出现在方案中。`);
       seen.add(item.id);
+      if (action !== 'move') {
+        return {
+          action,
+          id: item.id,
+          title: bookmark.title,
+          url: bookmark.url,
+          fromParentId: bookmark.parentId,
+          fromIndex: bookmark.index,
+          fromPath: bookmark.path.slice(0, -1)
+        };
+      }
       const path = core.normalizePath(item.folderPath);
       const actualRoot = scan.bookmarkBar?.title;
       if (!actualRoot) throw new Error('没有找到浏览器的收藏夹栏根目录。');
@@ -238,6 +251,7 @@
       path[0] = actualRoot;
       if (path.includes(core.temporaryFolderName)) throw new Error(`目标目录不能仍然位于“${core.temporaryFolderName}”：${item.folderPath}`);
       return {
+        action: 'move',
         id: item.id,
         folderPath: path,
         title: bookmark.title,
@@ -257,23 +271,44 @@
     const revision = ++previewRevision;
     planToken = null;
     applyButton.disabled = true;
-    const checked = await background({ command: 'plan.validate', plan: plan.map(item => ({ id: item.id, folderPath: item.folderPath.join('/') })) });
+    const checked = await background({
+      command: 'plan.validate',
+      plan: plan.map(item => item.action === 'move'
+        ? { id: item.id, folderPath: item.folderPath.join('/') }
+        : { id: item.id, action: item.action })
+    });
     if (revision !== previewRevision) return;
-    if (checked.preview.some((item, index) => item.id !== plan[index].id || item.title !== plan[index].title || item.url !== plan[index].url || item.fromPath !== plan[index].fromPath.join('/') || item.folderPath !== plan[index].folderPath.join('/'))) throw new Error('扫描后条目已改变，请重新扫描并预览。');
+    if (checked.preview.some((item, index) => {
+      const sameIdentity = item.id === plan[index].id && item.title === plan[index].title && item.url === plan[index].url && item.fromPath === plan[index].fromPath.join('/');
+      if (plan[index].action !== 'move') return !sameIdentity || item.action !== plan[index].action;
+      return !sameIdentity || item.folderPath !== plan[index].folderPath.join('/');
+    })) throw new Error('扫描后条目已改变，请重新扫描并预览。');
     planToken = checked.planToken;
     validatedPlan = plan;
     planPreview.replaceChildren();
     const missing = missingFolderPaths(plan);
+    const moves = plan.filter(item => item.action === 'move').length;
+    const recycled = plan.filter(item => item.action === 'delete').length;
+    const purged = plan.filter(item => item.action === 'purge').length;
+    const parts = [];
+    if (moves) parts.push(`移动 ${moves} 条收藏`);
+    if (recycled) parts.push(`${recycled} 条移入回收站`);
+    if (purged) parts.push(`永久删除 ${purged} 条`);
     planSummary.className = 'plan-summary';
-    planSummary.textContent = `将移动 ${plan.length} 条收藏${missing.length ? `，并创建 ${missing.length} 个目标文件夹` : '，不需要创建新文件夹'}。`;
+    planSummary.textContent = `将${parts.join('，')}${missing.length ? `，并创建 ${missing.length} 个目标文件夹` : moves ? '，不需要创建新文件夹' : ''}。`;
     for (const item of plan) {
       const row = createElement('article', 'plan-item');
       const from = createElement('div', 'path-box');
       from.append(createElement('small', '', item.title || item.url));
       from.append(document.createTextNode(item.fromPath.join(' / ')));
       const to = createElement('div', 'path-box');
-      to.append(createElement('small', '', '移动到'));
-      to.append(document.createTextNode(item.folderPath.join(' / ')));
+      const destination = item.action === 'delete'
+        ? `${scan.bookmarkBar?.title || '收藏夹栏'} / 回收站`
+        : item.action === 'purge'
+          ? '永久删除'
+          : item.folderPath.join(' / ');
+      to.append(createElement('small', '', item.action === 'move' ? '移动到' : item.action === 'delete' ? '软删除到' : '删除'));
+      to.append(document.createTextNode(destination));
       row.append(from, createElement('div', 'arrow', '→'), to);
       planPreview.append(row);
     }
@@ -306,7 +341,7 @@
     for (const operation of operations) {
       const row = createElement('article', `history-item${operation.undoneAt ? ' undone' : ''}`);
       const content = createElement('div');
-      content.append(createElement('p', 'item-title', `${core.formatDate(operation.createdAt)} · 已移动 ${operation.moves.filter(item => item.state !== 'pending').length} 条，待核对 ${operation.moves.filter(item => item.state === 'pending').length} 条`));
+      content.append(createElement('p', 'item-title', `${core.formatDate(operation.createdAt)} · 已处理 ${operation.moves.filter(item => item.state !== 'pending').length} 条，待核对 ${operation.moves.filter(item => item.state === 'pending').length} 条`));
       const state = operation.undoneAt ? `已于 ${core.formatDate(operation.undoneAt)} 撤销` : operation.undoStatus === 'partial' ? '撤销有冲突，请查看操作详情' : operation.status === 'complete' ? '已完成' : '未完成，需核对逐项记录';
       content.append(createElement('p', 'item-meta', state));
       for (const conflict of operation.undoConflicts || []) content.append(createElement('p', 'item-meta', `条目 ${conflict.id}：${conflict.error}`));
