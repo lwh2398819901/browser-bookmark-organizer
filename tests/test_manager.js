@@ -254,6 +254,25 @@ async function testManager() {
   if (context.downloads.length !== 0) throw new Error('Deleting one backup did not remove its file record.');
   if (context.confirmCalls !== confirmationsBeforeDelete) throw new Error('Deleting a backup unexpectedly requested confirmation.');
 
+  const oldTime = Date.now() - 8 * 24 * 60 * 60 * 1000;
+  const recentTime = Date.now();
+  context.downloads.push(
+    { id: 41, state: 'complete', exists: true, fileSize: 100, filename: 'D:\\Downloads\\Bookmark-Organizer-Archives\\bookmark-archive-old.html', startTime: new Date(oldTime).toISOString() },
+    { id: 42, state: 'complete', exists: true, fileSize: 100, filename: 'D:\\Downloads\\Bookmark-Organizer-Archives\\bookmark-archive-new.html', startTime: new Date(recentTime).toISOString() }
+  );
+  await context.elements.get('#purge-archives').listeners.click();
+  if (context.downloads.some(item => item.id === 41)) throw new Error('Backups older than seven days were kept.');
+  if (!context.downloads.some(item => item.id === 42)) throw new Error('A recent backup was removed by the default purge.');
+  if (context.bookmarkMoves !== 0) throw new Error('Clearing backups changed bookmarks.');
+  const oldDay = new Date(oldTime);
+  const day = `${oldDay.getFullYear()}-${String(oldDay.getMonth() + 1).padStart(2, '0')}-${String(oldDay.getDate()).padStart(2, '0')}`;
+  context.downloads.push({ id: 43, state: 'complete', exists: true, fileSize: 100, filename: 'D:\\Downloads\\Bookmark-Organizer-Archives\\bookmark-archive-ranged.html', startTime: new Date(oldTime).toISOString() });
+  context.elements.get('#archive-from').value = day;
+  context.elements.get('#archive-until').value = day;
+  await context.elements.get('#purge-archives').listeners.click();
+  if (context.downloads.some(item => item.id === 43)) throw new Error('A backup inside the chosen range was kept.');
+  if (!context.downloads.some(item => item.id === 42)) throw new Error('A backup outside the chosen range was removed.');
+
   await context.elements.get('#scan').listeners.click();
   context.elements.get('#plan').value = `方案如下：\n\`\`\`json\n${JSON.stringify([{ id: '10', folderPath: '收藏夹栏/开发' }])}\n\`\`\``;
   await context.elements.get('#validate-plan').listeners.click();

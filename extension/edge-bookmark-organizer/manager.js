@@ -21,6 +21,10 @@
   const backupButton = document.querySelector('#backup');
   const refreshArchivesButton = document.querySelector('#refresh-archives');
   const backupStatus = document.querySelector('#backup-status');
+  const archiveOlderDays = document.querySelector('#archive-older-days');
+  const archiveFrom = document.querySelector('#archive-from');
+  const archiveUntil = document.querySelector('#archive-until');
+  const purgeArchivesButton = document.querySelector('#purge-archives');
   const archiveList = document.querySelector('#archive-list');
   const restoreGuide = document.querySelector('#restore-guide');
   const restoreFile = document.querySelector('#restore-file');
@@ -391,6 +395,48 @@
   }
 
   backupButton.addEventListener('click', runBackup);
+
+  function purgeUsesRange() {
+    return Boolean(archiveFrom.value || archiveUntil.value);
+  }
+
+  function updatePurgeLabel() {
+    if (purgeUsesRange()) {
+      purgeArchivesButton.textContent = '清空该时段的备份';
+      return;
+    }
+    const days = archiveOlderDays.value === '' ? 7 : archiveOlderDays.value;
+    purgeArchivesButton.textContent = `清空 ${days} 天前的备份`;
+  }
+
+  async function purgeArchives() {
+    purgeArchivesButton.disabled = true;
+    try {
+      const archives = await core.searchManagedArchives();
+      const selected = core.archivesInScope(archives, purgeUsesRange()
+        ? { from: archiveFrom.value, until: archiveUntil.value }
+        : { olderThanDays: archiveOlderDays.value === '' ? 7 : Number(archiveOlderDays.value) });
+      if (!selected.length) {
+        setMessage(backupStatus, '没有符合条件的备份。收藏夹没有改变。');
+        return;
+      }
+      const cleanup = await core.removeManagedArchives(selected);
+      const failed = cleanup.warnings.length ? ` ${cleanup.warnings.length} 份未能删除。` : '';
+      setMessage(backupStatus, `已清空 ${cleanup.removed.length} 份备份。${failed}收藏夹没有改变。`, cleanup.warnings.length ? 'error' : 'success');
+      restoreGuide.hidden = true;
+      await refreshArchives();
+    } catch (error) {
+      setMessage(backupStatus, `清空备份失败：${error.message}`, 'error');
+    } finally {
+      purgeArchivesButton.disabled = false;
+    }
+  }
+
+  archiveOlderDays.addEventListener('input', updatePurgeLabel);
+  archiveFrom.addEventListener('input', updatePurgeLabel);
+  archiveUntil.addEventListener('input', updatePurgeLabel);
+  purgeArchivesButton.addEventListener('click', purgeArchives);
+  updatePurgeLabel();
 
   refreshArchivesButton.addEventListener('click', refreshArchives);
 

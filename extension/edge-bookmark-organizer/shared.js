@@ -408,13 +408,61 @@
     return ids;
   }
 
-  async function listManagedArchives() {
+  async function searchManagedArchives() {
     const downloads = await chrome.downloads.search({
       query: [archiveDirectory, archivePrefix],
       orderBy: ['-startTime'],
       limit: 0
     });
-    return downloads.filter(item => isManagedArchive(item) && item.exists !== false).slice(0, maxArchives);
+    return downloads.filter(item => isManagedArchive(item) && item.exists !== false);
+  }
+
+  async function listManagedArchives() {
+    return (await searchManagedArchives()).slice(0, maxArchives);
+  }
+
+  function localDayBound(value, end) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    return end ? new Date(year, month - 1, day, 23, 59, 59, 999).getTime() : new Date(year, month - 1, day).getTime();
+  }
+
+  function archivesInScope(archives, { olderThanDays = 7, from = '', until = '', now = Date.now() } = {}) {
+    const start = localDayBound(from, false);
+    const end = localDayBound(until, true);
+    if (from || until) {
+      if (start === null || end === null) throw new Error('指定时段需要同时填写开始和结束日期。');
+      if (start > end) throw new Error('开始日期不能晚于结束日期。');
+      return archives.filter(item => {
+        const time = Date.parse(item.startTime || '');
+        return Number.isFinite(time) && time >= start && time <= end;
+      });
+    }
+    const days = Number(olderThanDays);
+    if (!Number.isInteger(days) || days < 0) throw new Error('天数必须是 0 或正整数。');
+    const cutoff = now - days * 24 * 60 * 60 * 1000;
+    return archives.filter(item => {
+      const time = Date.parse(item.startTime || '');
+      return Number.isFinite(time) && time < cutoff;
+    });
+  }
+
+  async function removeManagedArchives(items) {
+    const removed = [];
+    const warnings = [];
+    for (const item of items) {
+      try {
+        await chrome.downloads.removeFile(item.id);
+        await chrome.downloads.erase({ id: item.id });
+        removed.push(item.filename);
+      } catch (error) {
+        warnings.push(`${item.filename}：${error.message}`);
+      }
+    }
+    return { removed, warnings };
   }
 
   async function trimArchives() {
@@ -562,6 +610,9 @@
     idsUnder,
     isManagedArchive,
     listManagedArchives,
+    searchManagedArchives,
+    archivesInScope,
+    removeManagedArchives,
     trimArchives,
     archiveCleanupMessage,
     formatDate,

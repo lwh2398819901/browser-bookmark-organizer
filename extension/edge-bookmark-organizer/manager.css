@@ -37,6 +37,10 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 .message { min-height: 23px; margin: 14px 0 0; color: var(--muted); white-space: pre-wrap; }
 .message.success { color: #18794e; }
 .message.error { color: var(--danger); }
+.archive-purge { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; color: var(--muted); font-size: 14px; }
+.archive-purge input { width: auto; }
+.archive-purge input[type="number"] { width: 72px; }
+.purge-or { margin-left: 4px; }
 .archive-list, .bookmark-list, .plan-preview, .history-list { display: grid; gap: 10px; margin-top: 16px; }
 .archive-item, .bookmark-item, .plan-item, .history-item { display: grid; gap: 10px; border-top: 1px solid var(--border); padding: 15px 0 4px; }
 .archive-item { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }

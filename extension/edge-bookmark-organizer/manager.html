@@ -29,12 +29,22 @@
         <div>
           <p class="eyebrow">备份与恢复</p>
           <h2>给当前状态留一份保险</h2>
-          <p>一键导出完整 HTML；本扩展自动维护最近 30 份。</p>
+          <p>一键导出完整 HTML；本扩展自动维护最近 30 份。也可按天数或日期清空这些备份文件。</p>
         </div>
         <div class="actions">
           <button id="backup" class="primary">一键备份收藏夹</button>
           <button id="refresh-archives">刷新列表</button>
         </div>
+      </div>
+      <div class="archive-purge">
+        <label for="archive-older-days">早于</label>
+        <input id="archive-older-days" type="number" min="0" step="1" value="7" inputmode="numeric">
+        <span>天</span>
+        <span class="purge-or">或时段</span>
+        <input id="archive-from" type="date" aria-label="起始日期">
+        <span>至</span>
+        <input id="archive-until" type="date" aria-label="结束日期">
+        <button id="purge-archives" class="danger-button" type="button">清空 7 天前的备份</button>
       </div>
       <p id="backup-status" class="message" role="status"></p>
       <div id="archive-list" class="archive-list" aria-live="polite"></div>
