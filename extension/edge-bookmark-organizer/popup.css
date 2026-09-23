@@ -21,6 +21,11 @@ p { margin: 0; }
 .muted { color: var(--muted); }
 .single-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .state { min-height: 17px; margin-top: 5px; color: var(--muted); font-size: 11px; white-space: pre-wrap; }
+button.site-line { display: block; width: 100%; min-height: 0; margin-top: 2px; padding: 0; border: 0; background: transparent; color: var(--muted); font-weight: 500; text-align: left; white-space: normal; }
+button.site-line:hover:not(:disabled) { border: 0; color: var(--accent); }
+button.site-line:disabled { opacity: 1; cursor: default; }
+.site-samples { margin: 4px 0 0; padding: 0 0 0 16px; color: var(--muted); font-size: 11px; }
+.site-samples li { margin: 2px 0; }
 .state.success { color: #18794e; }
 .state.error { color: #b42318; }
 button { min-height: 32px; border: 1px solid var(--border); border-radius: 7px; padding: 5px 9px; background: Canvas; color: CanvasText; cursor: pointer; font: inherit; font-weight: 650; }

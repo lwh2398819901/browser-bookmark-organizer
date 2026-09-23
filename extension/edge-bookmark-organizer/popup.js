@@ -6,6 +6,8 @@
   const currentCard = document.querySelector('#current-card');
   const pageUrl = document.querySelector('#page-url');
   const pageState = document.querySelector('#page-state');
+  const siteLine = document.querySelector('#site-footprint');
+  const siteSamples = document.querySelector('#site-samples');
   const addButton = document.querySelector('#add-temporary');
   const temporaryCount = document.querySelector('#temporary-count');
   const duplicateCount = document.querySelector('#duplicate-count');
@@ -16,6 +18,7 @@
   const closePopupButton = document.querySelector('#close-popup');
   let currentTab = null;
   let buttonMode = 'add';
+  let siteSampleItems = [];
 
   function setState(element, text, kind = '') {
     element.textContent = text;
@@ -33,9 +36,36 @@
     return bookmarks.filter(item => item.canonical === canonical);
   }
 
-  function locationSummary(existing) {
-    const paths = existing.slice(0, 2).map(item => item.path.slice(0, -1).join(' / ')).join('；');
-    return existing.length > 2 ? `已经收藏 ${existing.length} 处：${paths}` : `已经收藏：${paths}`;
+  function pageSentence(existing) {
+    if (!existing.length) return '这一页还没收藏。';
+    const folders = existing[0].path.slice(0, -1);
+    const folder = folders[folders.length - 1] || '收藏夹栏';
+    return existing.length > 1
+      ? `这一页已收藏 ${existing.length} 处，其中一处在「${folder}」。`
+      : `这一页已收藏，在「${folder}」。`;
+  }
+
+  function siteSentence(footprint, pageSaved) {
+    if (!footprint.count) return '这个网站还没有收过。';
+    if (pageSaved && !footprint.otherCount) return '同站只有这一页。';
+    const count = pageSaved ? footprint.otherCount : footprint.count;
+    const lead = pageSaved ? `同站另外还有 ${count} 条` : `同站已有 ${count} 条`;
+    const pages = !pageSaved && footprint.uniquePages !== footprint.count ? `（${footprint.uniquePages} 个不同页面）` : '';
+    const place = footprint.home
+      ? `，大多在「${footprint.home}」`
+      : footprint.folderCount > 1 ? `，散在 ${footprint.folderCount} 个目录` : '';
+    return `${lead}${pages}${place}。`;
+  }
+
+  function renderSite(bookmarks, url, pageSaved) {
+    const footprint = core.siteFootprint(bookmarks, url);
+    siteSampleItems = footprint.samples;
+    siteLine.hidden = false;
+    siteLine.disabled = siteSampleItems.length === 0;
+    siteLine.textContent = siteSentence(footprint, pageSaved);
+    siteLine.setAttribute('aria-expanded', 'false');
+    siteSamples.hidden = true;
+    siteSamples.replaceChildren();
   }
 
   function setBookmarkButton(mode) {
@@ -73,19 +103,21 @@
     pageUrl.textContent = currentTab?.url || '';
     if (!currentTab?.url || !/^https?:/i.test(currentTab.url)) {
       setState(pageState, '当前页面不能加入收藏夹。', 'error');
+      siteLine.hidden = true;
+      siteSamples.hidden = true;
       setBookmarkButton('add');
       addButton.disabled = true;
       return;
     }
     const { collected } = await refreshSummary();
-    const existing = matchingBookmarks(collected.bookmarks, currentTab.url);
-    if (existing.length) {
-      setState(pageState, locationSummary(existing), 'success');
-      setBookmarkButton('remove');
-      return;
-    }
-    setState(pageState, '尚未收藏。');
-    setBookmarkButton('add');
+    paintPage(collected.bookmarks);
+  }
+
+  function paintPage(bookmarks) {
+    const existing = matchingBookmarks(bookmarks, currentTab.url);
+    setState(pageState, pageSentence(existing), existing.length ? 'success' : '');
+    setBookmarkButton(existing.length ? 'remove' : 'add');
+    renderSite(bookmarks, currentTab.url, existing.length > 0);
   }
 
   async function removeCurrentBookmarks() {
@@ -99,9 +131,9 @@
       return;
     }
     for (const item of matches) await chrome.bookmarks.remove(item.id);
+    const refreshed = await refreshSummary();
+    paintPage(refreshed.collected.bookmarks);
     setState(pageState, matches.length > 1 ? `已取消 ${matches.length} 处收藏。` : '已取消收藏。', 'success');
-    setBookmarkButton('add');
-    await refreshSummary();
   }
 
   async function ensureTemporaryFolder(roots) {
@@ -124,8 +156,7 @@
       const collected = core.collectBookmarks(roots);
       const existing = matchingBookmarks(collected.bookmarks, currentTab.url);
       if (existing.length) {
-        setState(pageState, locationSummary(existing), 'success');
-        setBookmarkButton('remove');
+        paintPage(collected.bookmarks);
         return;
       }
       const temporary = await ensureTemporaryFolder(roots);
@@ -168,6 +199,22 @@
   openManagerButton.addEventListener('click', async () => {
     await chrome.tabs.create({ url: chrome.runtime.getURL('manager.html') });
     window.close();
+  });
+
+  siteLine.addEventListener('click', () => {
+    if (!siteSampleItems.length) return;
+    const willOpen = siteSamples.hidden;
+    siteLine.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    if (!willOpen) {
+      siteSamples.hidden = true;
+      return;
+    }
+    siteSamples.replaceChildren(...siteSampleItems.map(sample => {
+      const item = document.createElement('li');
+      item.textContent = `${sample.title} · ${sample.folder}`;
+      return item;
+    }));
+    siteSamples.hidden = false;
   });
 
   closePopupButton.addEventListener('click', () => window.close());

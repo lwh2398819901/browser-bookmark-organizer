@@ -282,10 +282,38 @@ async function testPopupDuplicateGuard() {
   await context.elements.get('#add-temporary').listeners.click();
   const after = context.BookmarkOrganizerCore.collectBookmarks(context.tree).bookmarks.length;
   if (after !== before + 1) throw new Error('Quick collect did not prevent an exact duplicate.');
-  if (!context.elements.get('#page-state').textContent.includes('已经收藏')) throw new Error('Duplicate guard did not report the existing bookmark.');
+  if (!context.elements.get('#page-state').textContent.includes('已收藏')) throw new Error('Duplicate guard did not report the existing bookmark.');
   await context.elements.get('#backup').listeners.click();
   if (!context.window.closed || context.downloads.length !== 1) throw new Error('Popup backup did not finish in the background and close.');
   if (context.chrome.tabs.created.some(item => item.url.endsWith('manager.html?action=backup'))) throw new Error('Popup backup opened an unnecessary manager tab.');
+}
+
+async function testPopupSiteFootprint() {
+  const context = makeEnvironment('https://www.example.test/guide');
+  context.findNode('1').children.push({
+    id: '30', parentId: '1', index: 2, title: '远程工作', children: [
+      { id: '31', parentId: '30', index: 0, title: '另一篇', url: 'https://example.test/other' },
+      { id: '32', parentId: '30', index: 1, title: '再一篇', url: 'https://blog.example.test/post' }
+    ]
+  });
+  load(context, extensionFile('shared.js'));
+  vm.runInContext(fs.readFileSync(extensionFile('popup.js'), 'utf8'), context);
+  await tick();
+  const line = context.elements.get('#site-footprint');
+  if (!context.elements.get('#page-state').textContent.includes('这一页还没收藏')) {
+    throw new Error(`New page was treated as saved: ${context.elements.get('#page-state').textContent}`);
+  }
+  if (!line.textContent.includes('同站已有 3 条') || !line.textContent.includes('远程工作')) {
+    throw new Error(`Site footprint did not describe the existing collection: ${line.textContent}`);
+  }
+  if (context.elements.get('#add-temporary').textContent !== '加入“临时收藏”') {
+    throw new Error('A new page on a known site offered the wrong action.');
+  }
+  await line.listeners.click();
+  const samples = context.elements.get('#site-samples');
+  if (samples.hidden || !samples.children.some(item => item.textContent.includes('另一篇'))) {
+    throw new Error('Site footprint did not expand related pages.');
+  }
 }
 
 async function testPopupUnbookmark() {
@@ -297,8 +325,8 @@ async function testPopupUnbookmark() {
   if (button.disabled || button.textContent !== '取消收藏') {
     throw new Error(`Bookmarked page did not offer unbookmark: ${button.textContent}`);
   }
-  if (!context.elements.get('#page-state').textContent.includes('已经收藏')) {
-    throw new Error('Bookmarked page did not show its existing location.');
+  if (!context.elements.get('#page-state').textContent.includes('已收藏') || !context.elements.get('#site-footprint').textContent.includes('同站只有这一页')) {
+    throw new Error(`Bookmarked page did not describe itself and its site: ${context.elements.get('#page-state').textContent} / ${context.elements.get('#site-footprint').textContent}`);
   }
   await button.listeners.click();
   const remaining = context.BookmarkOrganizerCore.collectBookmarks(context.tree).bookmarks;
@@ -385,6 +413,7 @@ async function testUndoSkipsDeletedBookmarks() {
 (async () => {
   await testManager();
   await testPopupDuplicateGuard();
+  await testPopupSiteFootprint();
   await testPopupUnbookmark();
   await testUndoRestoresOriginalOrder();
   await testUndoSkipsDeletedBookmarks();

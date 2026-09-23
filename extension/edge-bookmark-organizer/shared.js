@@ -37,6 +37,68 @@
     return fields.map(field => field.rendered).join('&');
   }
 
+  const multiPartSuffixes = new Set(['co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'com.cn', 'net.cn', 'org.cn', 'com.au', 'net.au', 'co.jp', 'com.hk', 'com.tw', 'com.br']);
+
+  function siteKey(url) {
+    try {
+      const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+      const labels = hostname.split('.').filter(Boolean);
+      if (labels.length <= 2) return labels.join('.');
+      const tail = labels.slice(-2).join('.');
+      return (multiPartSuffixes.has(tail) ? labels.slice(-3) : labels.slice(-2)).join('.');
+    } catch {
+      return '';
+    }
+  }
+
+  function bookmarkFolderName(bookmark) {
+    const folders = (bookmark.path || []).slice(0, -1);
+    return folders[folders.length - 1] || '收藏夹栏';
+  }
+
+  function siteFootprint(bookmarks, url) {
+    const site = siteKey(url);
+    const pageCanonical = canonicalUrl(url);
+    const onSite = site ? bookmarks.filter(item => siteKey(item.url) === site) : [];
+    const folderCounts = new Map();
+    for (const item of onSite) {
+      const name = bookmarkFolderName(item);
+      folderCounts.set(name, (folderCounts.get(name) || 0) + 1);
+    }
+    let home = null;
+    let homeCount = 0;
+    for (const [name, count] of folderCounts) {
+      if (count > homeCount) {
+        home = name;
+        homeCount = count;
+      }
+    }
+    const concentrated = onSite.length > 0 && homeCount * 2 > onSite.length;
+    const currentFolders = new Set(onSite.filter(item => item.canonical === pageCanonical).map(bookmarkFolderName));
+    const seen = new Set();
+    const samples = [];
+    const ranked = [...onSite].sort((left, right) => {
+      const leftNear = currentFolders.has(bookmarkFolderName(left)) ? 0 : 1;
+      const rightNear = currentFolders.has(bookmarkFolderName(right)) ? 0 : 1;
+      if (leftNear !== rightNear) return leftNear - rightNear;
+      return Number(left.canonical === pageCanonical) - Number(right.canonical === pageCanonical);
+    });
+    for (const item of ranked) {
+      if (item.canonical === pageCanonical || seen.has(item.canonical)) continue;
+      seen.add(item.canonical);
+      samples.push({ title: item.title || item.url, folder: bookmarkFolderName(item) });
+      if (samples.length === 3) break;
+    }
+    return {
+      count: onSite.length,
+      otherCount: onSite.filter(item => item.canonical !== pageCanonical).length,
+      uniquePages: new Set(onSite.map(item => item.canonical)).size,
+      folderCount: folderCounts.size,
+      home: concentrated ? home : null,
+      samples
+    };
+  }
+
   function canonicalUrl(url) {
     try {
       const parsed = new URL(url);
@@ -482,6 +544,8 @@
     maxArchives,
     normalizedQuery,
     canonicalUrl,
+    siteKey,
+    siteFootprint,
     normalizePath,
     planSignature,
     temporaryBookmarks,
