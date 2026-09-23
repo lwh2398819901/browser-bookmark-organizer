@@ -430,7 +430,7 @@
     return end ? new Date(year, month - 1, day, 23, 59, 59, 999).getTime() : new Date(year, month - 1, day).getTime();
   }
 
-  function archivesInScope(archives, { olderThanDays = 7, from = '', until = '', now = Date.now() } = {}) {
+  function archivesInScope(archives, { olderThanDays = null, from = '', until = '', now = Date.now() } = {}) {
     const start = localDayBound(from, false);
     const end = localDayBound(until, true);
     if (from || until) {
@@ -440,6 +440,9 @@
         const time = Date.parse(item.startTime || '');
         return Number.isFinite(time) && time >= start && time <= end;
       });
+    }
+    if (olderThanDays === null || olderThanDays === undefined || olderThanDays === '') {
+      throw new Error('需要指定天数，或同时给出开始和结束日期。');
     }
     const days = Number(olderThanDays);
     if (!Number.isInteger(days) || days < 0) throw new Error('天数必须是 0 或正整数。');

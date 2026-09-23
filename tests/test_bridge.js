@@ -119,7 +119,14 @@ function makeEnvironment({ serviceWorker = false } = {}) {
           return item.id;
         },
         search: async query => query.id ? downloads.filter(item => item.id === query.id) : [...downloads].reverse(),
-        removeFile: async () => {}, erase: async () => {},
+        removeFile: async id => {
+          const item = downloads.find(download => download.id === id);
+          if (item) item.exists = false;
+        },
+        erase: async query => {
+          const index = downloads.findIndex(download => download.id === query.id);
+          if (index >= 0) downloads.splice(index, 1);
+        },
         onChanged: { addListener() {}, removeListener() {} }
       },
       storage: {
@@ -486,6 +493,52 @@ function send(context, request, token = 'test-secret', senderUrl = 'http://127.0
   const kept = await send(nested, { command: 'folders.prune', empty: true, exclude: ['收藏夹栏/稍后阅读'] });
   assert.ok(kept.result.preview.some(item => item.title === '空壳'));
   assert.ok(!kept.result.preview.some(item => item.title === '稍后阅读'));
+
+  const dupes = boot();
+  dupes.findNode('1').children.push(
+    { id: '70', parentId: '1', index: 2, title: '甲', children: [{ id: '71', parentId: '70', index: 0, title: '笔记', children: [] }] },
+    { id: '72', parentId: '1', index: 3, title: '乙', children: [{ id: '73', parentId: '72', index: 0, title: '笔记', children: [] }] }
+  );
+  const duplicateMove = await send(dupes, {
+    command: 'plan.validate', scope: 'all',
+    plan: [
+      { id: '71', action: 'moveFolder', to: '收藏夹栏/新建', index: -1 },
+      { id: '73', action: 'moveFolder', to: '收藏夹栏/新建', index: -1 }
+    ]
+  });
+  assert.equal(duplicateMove.ok, false);
+  assert.match(duplicateMove.error, /两个「笔记」/);
+
+  const recycled = boot();
+  recycled.findNode('10').dateAdded = Date.now() - 400 * 24 * 60 * 60 * 1000;
+  const softDelete = await send(recycled, { command: 'plan.validate', plan: [{ id: '10', action: 'delete' }] });
+  const softApplied = await send(recycled, { command: 'plan.apply', planToken: softDelete.result.planToken, confirmed: true });
+  assert.equal(softApplied.ok, true, JSON.stringify(softApplied));
+  const recentPurge = await send(recycled, { command: 'recycle.purge', olderThanDays: 7 });
+  assert.equal(recentPurge.result.moveCount, 0);
+  recycled.storageData.bookmarkOrganizerRecycleEntered['10'] = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  const agedPurge = await send(recycled, { command: 'recycle.purge', olderThanDays: 7 });
+  assert.equal(agedPurge.result.preview[0].id, '10');
+  const manual = boot();
+  manual.findNode('1').children.push({ id: '80', parentId: '1', index: 2, title: '回收站', children: [
+    { id: '81', parentId: '80', index: 0, title: '旧收藏', url: 'https://example.test/old', dateAdded: Date.now() - 400 * 24 * 60 * 60 * 1000 }
+  ] });
+  const undated = await send(manual, { command: 'recycle.purge', olderThanDays: 7 });
+  assert.equal(undated.result.moveCount, 0);
+  assert.equal(undated.result.skippedUndated, 1);
+
+  const archives = boot();
+  archives.downloads.push(
+    { id: 7, state: 'complete', exists: true, filename: 'D:\\Downloads\\Bookmark-Organizer-Archives\\bookmark-archive-old.html', startTime: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString() },
+    { id: 8, state: 'complete', exists: true, filename: 'D:\\Downloads\\Bookmark-Organizer-Archives\\bookmark-archive-new.html', startTime: new Date().toISOString() }
+  );
+  const archivePreview = await send(archives, { command: 'archives.purge', olderThanDays: 7 });
+  assert.equal(archivePreview.result.deleteCount, 1);
+  assert.equal(archives.downloads.some(item => item.id === 7), true);
+  const archiveApply = await send(archives, { command: 'archives.purge', olderThanDays: 7, confirmed: true });
+  assert.equal(archiveApply.ok, true, JSON.stringify(archiveApply));
+  assert.equal(archives.downloads.some(item => item.id === 7), false);
+  assert.equal(archives.downloads.some(item => item.id === 8), true);
 
   console.log('Local Agent bridge checks passed (including failure, concurrency and recovery scenarios).');
 })().catch(error => {

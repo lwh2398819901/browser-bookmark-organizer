@@ -338,6 +338,23 @@ def build_request(args: argparse.Namespace) -> dict[str, Any]:
             "command": "recycle.purge",
             "olderThanDays": args.older_than_days,
         }, args.confirmed)
+    if args.command == "purge-archives":
+        has_days = args.older_than_days is not None
+        has_from = bool(args.archive_from)
+        has_until = bool(args.archive_until)
+        if has_days and (has_from or has_until):
+            raise RuntimeError("purge-archives 的天数和日期范围只能选一种。")
+        if not has_days and not (has_from and has_until):
+            raise RuntimeError("purge-archives 需要 --older-than-days，或同时给出 --from 和 --until。")
+        if has_days and args.older_than_days < 0:
+            raise RuntimeError("--older-than-days 不能为负数。0 表示全部已有备份。")
+        payload = {"command": "archives.purge"}
+        if has_days:
+            payload["olderThanDays"] = args.older_than_days
+        else:
+            payload["from"] = args.archive_from
+            payload["until"] = args.archive_until
+        return confirmed_payload(payload, args.confirmed)
     raise RuntimeError(f"未知命令：{args.command}")
 
 
@@ -412,8 +429,13 @@ def parse_args() -> argparse.Namespace:
     move_folder.add_argument("--index", type=int, default=-1, help="目标位置，-1 表示末尾")
     move_folder.add_argument("--confirmed", action="store_true")
     purge_recycle = subparsers.add_parser("purge-recycle", parents=[common])
-    purge_recycle.add_argument("--older-than-days", type=int)
+    purge_recycle.add_argument("--older-than-days", type=int, help="按进入回收站的时间。没有进入时间记录的条目会被跳过")
     purge_recycle.add_argument("--confirmed", action="store_true")
+    purge_archives = subparsers.add_parser("purge-archives", parents=[common])
+    purge_archives.add_argument("--older-than-days", type=int, help="删除早于这么多天的本扩展备份。0 表示全部已有备份")
+    purge_archives.add_argument("--from", dest="archive_from", help="时段开始日期，YYYY-MM-DD，需与 --until 一起使用")
+    purge_archives.add_argument("--until", dest="archive_until", help="时段结束日期，YYYY-MM-DD，含当天")
+    purge_archives.add_argument("--confirmed", action="store_true")
     apply_plan = subparsers.add_parser("apply-plan", parents=[common])
     apply_plan.add_argument("--plan-token", required=True)
     apply_plan.add_argument("--confirmed", action="store_true")

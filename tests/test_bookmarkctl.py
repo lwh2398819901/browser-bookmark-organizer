@@ -193,6 +193,20 @@ class BridgePageTests(unittest.TestCase):
         self.assertEqual(request["path"], "收藏夹栏/资料")
         self.assertEqual(request["exclude"], ["收藏夹栏/稍后阅读", "收藏夹栏/待删除"])
 
+    def test_purge_archives_accepts_age_or_range(self):
+        with patch.object(sys, "argv", ["bookmarkctl.py", "purge-archives", "--older-than-days", "0"]):
+            request = bookmarkctl.build_request(bookmarkctl.parse_args())
+        self.assertEqual(request["command"], "archives.purge")
+        self.assertEqual(request["olderThanDays"], 0)
+        self.assertNotIn("confirmed", request)
+        with patch.object(sys, "argv", ["bookmarkctl.py", "purge-archives", "--from", "2026-09-01", "--until", "2026-09-22"]):
+            ranged = bookmarkctl.build_request(bookmarkctl.parse_args())
+        self.assertEqual(ranged["from"], "2026-09-01")
+        self.assertEqual(ranged["until"], "2026-09-22")
+        with patch.object(sys, "argv", ["bookmarkctl.py", "purge-archives", "--older-than-days", "7", "--from", "2026-09-01", "--until", "2026-09-22"]):
+            with self.assertRaises(RuntimeError):
+                bookmarkctl.build_request(bookmarkctl.parse_args())
+
     def test_exclude_requires_empty_prune(self):
         with patch.object(sys, "argv", ["bookmarkctl.py", "prune-folders", "--path", "收藏夹栏/待删除", "--exclude", "收藏夹栏/稍后阅读"]):
             args = bookmarkctl.parse_args()

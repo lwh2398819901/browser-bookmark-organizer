@@ -6,6 +6,8 @@ importScripts('shared.js', 'bridge-config.js');
   const core = globalThis.BookmarkOrganizerCore;
   const bridgeConfig = globalThis.BookmarkOrganizerBridgeConfig || {};
   const pendingPlanKey = 'bookmarkOrganizerPendingPlan';
+  const pendingArchiveKey = 'bookmarkOrganizerPendingArchivePurge';
+  const recycleEnteredKey = 'bookmarkOrganizerRecycleEntered';
   const planLifetimeMs = 30 * 60 * 1000;
   const operationStore = core.createOperationStore('bookmarkOrganizerOperations', 20);
   let busy = false;
@@ -184,6 +186,18 @@ importScripts('shared.js', 'bridge-config.js');
       if (plan.some(entry => !entry.sourcePath && `${entry.fromPath.join('/')}/`.startsWith(`${item.sourcePath}/`))) {
         throw new Error(`目录操作与其中的书签操作重叠：${item.sourcePath}`);
       }
+    }
+    const arrivals = new Map();
+    for (const item of plan) {
+      const parent = item.action === 'moveFolder' && Array.isArray(item.toParentPath)
+        ? item.toParentPath.join('/')
+        : item.action === 'deleteFolder' && Array.isArray(item.folderPath)
+          ? item.folderPath.join('/')
+          : null;
+      if (!parent) continue;
+      const key = `${parent}\n${item.title}`;
+      if (arrivals.has(key)) throw new Error(`同一次计划不能把两个「${item.title}」放进「${parent}」。`);
+      arrivals.set(key, item.id);
     }
     return plan;
   }
@@ -505,7 +519,9 @@ importScripts('shared.js', 'bridge-config.js');
       move.state = 'moved';
       move.toParentId = placed.parentId;
       move.toIndex = placed.index;
+      if (item.action === 'delete' || item.action === 'deleteFolder') await stampRecycleEntered(item.id);
     }
+    if (item.action === 'purge' || item.action === 'purgeFolder') await clearRecycleEntered(item.id);
     await persist();
   }
 
@@ -618,6 +634,7 @@ importScripts('shared.js', 'bridge-config.js');
           event.done = true;
           move.undoState = 'restored';
           restored += 1;
+          if (move.action === 'delete' || move.action === 'deleteFolder') await clearRecycleEntered(move.id);
         }
         await operationStore.save(operations);
       } catch (error) {
@@ -639,6 +656,48 @@ importScripts('shared.js', 'bridge-config.js');
     return folder;
   }
 
+  async function loadRecycleEntered() {
+    const stored = await chrome.storage.local.get({ [recycleEnteredKey]: {} });
+    const value = stored[recycleEnteredKey];
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  }
+
+  async function stampRecycleEntered(id) {
+    const entered = await loadRecycleEntered();
+    entered[id] = new Date().toISOString();
+    await chrome.storage.local.set({ [recycleEnteredKey]: entered });
+  }
+
+  async function clearRecycleEntered(id) {
+    const entered = await loadRecycleEntered();
+    delete entered[id];
+    await chrome.storage.local.set({ [recycleEnteredKey]: entered });
+  }
+
+  async function recyclePurgePlan(scan, request) {
+    const recycle = barFolders(scan).find(folder => folder.path === `${scan.bookmarkBar.title}/${core.recycleFolderName}`);
+    if (!recycle) return { raw: [], skippedUndated: 0 };
+    const node = findTreeNode(scan.roots, recycle.id);
+    const hasAgeLimit = request.olderThanDays !== null && request.olderThanDays !== undefined && request.olderThanDays !== '';
+    const days = Number(request.olderThanDays);
+    const cutoff = hasAgeLimit && Number.isFinite(days) ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
+    const entered = await loadRecycleEntered();
+    const raw = [];
+    let skippedUndated = 0;
+    for (const child of node?.children || []) {
+      if (cutoff !== null) {
+        const stamp = Date.parse(entered[child.id] || '');
+        if (!Number.isFinite(stamp)) {
+          skippedUndated += 1;
+          continue;
+        }
+        if (stamp > cutoff) continue;
+      }
+      raw.push(child.url ? { id: child.id, action: 'purge' } : { id: child.id, action: 'purgeFolder' });
+    }
+    return { raw, skippedUndated };
+  }
+
   function buildPreparedPlan(scan, command, request) {
     if (command === 'folders.rename') {
       const folder = folderByPath(scan, request.path);
@@ -648,20 +707,7 @@ importScripts('shared.js', 'bridge-config.js');
       const folder = folderByPath(scan, request.path);
       return [{ id: folder.id, action: 'moveFolder', to: request.to, index: request.index }];
     }
-    if (command === 'recycle.purge') {
-      const recycle = barFolders(scan).find(folder => folder.path === `${scan.bookmarkBar.title}/${core.recycleFolderName}`);
-      if (!recycle) return [];
-      const node = findTreeNode(scan.roots, recycle.id);
-      const hasAgeLimit = request.olderThanDays !== null && request.olderThanDays !== undefined && request.olderThanDays !== '';
-      const days = Number(request.olderThanDays);
-      const cutoff = hasAgeLimit && Number.isFinite(days) ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
-      const raw = [];
-      for (const child of node?.children || []) {
-        if (cutoff !== null && (!Number.isFinite(child.dateAdded) || child.dateAdded > cutoff)) continue;
-        raw.push(child.url ? { id: child.id, action: 'purge' } : { id: child.id, action: 'purgeFolder' });
-      }
-      return raw;
-    }
+    if (command === 'recycle.purge') return [];
     if (request.empty) return emptyFolderPlan(scan, request);
     if (request.path) {
       const folder = folderByPath(scan, request.path);
@@ -697,14 +743,21 @@ importScripts('shared.js', 'bridge-config.js');
 
   async function prepareAndMaybeApply(command, request, timeoutMs) {
     const scan = await scanBookmarks('all');
-    const rawPlan = buildPreparedPlan(scan, command, request);
+    let rawPlan = buildPreparedPlan(scan, command, request);
+    let skippedUndated = 0;
+    if (command === 'recycle.purge') {
+      const purged = await recyclePurgePlan(scan, request);
+      rawPlan = purged.raw;
+      skippedUndated = purged.skippedUndated;
+    }
+    const skippedNote = skippedUndated ? { skippedUndated, skippedReason: '这些条目在回收站里，但没有进入时间记录。按天数清理不会动它们；不带 --older-than-days 的清空仍会包含它们。' } : {};
     if (!rawPlan.length) {
-      return { planToken: null, moveCount: 0, preview: [], message: '没有需要执行的变更。' };
+      return { planToken: null, moveCount: 0, preview: [], message: '没有需要执行的变更。', ...skippedNote };
     }
     const stored = await chrome.storage.local.get({ [pendingPlanKey]: null });
     const previousSignature = stored[pendingPlanKey]?.signature || null;
     const preview = await validateAndStore(rawPlan, 'all', false);
-    if (request.confirmed !== true) return preview;
+    if (request.confirmed !== true) return { ...preview, ...skippedNote };
     const current = await chrome.storage.local.get({ [pendingPlanKey]: null });
     if (!previousSignature || previousSignature !== current[pendingPlanKey]?.signature) {
       throw failure('还没有与当前目录状态一致的预览。请先确认返回的预览，再执行同一命令。', 'PREVIEW_REQUIRED', {
@@ -713,7 +766,39 @@ importScripts('shared.js', 'bridge-config.js');
       });
     }
     const applied = await applyStoredPlan(preview.planToken, timeoutMs);
-    return { ...applied, preview: preview.preview, missingFolders: preview.missingFolders };
+    return { ...applied, preview: preview.preview, missingFolders: preview.missingFolders, ...skippedNote };
+  }
+
+  function archivePurgeSelection(archives, request) {
+    return core.archivesInScope(archives, {
+      olderThanDays: request.olderThanDays,
+      from: request.from || '',
+      until: request.until || ''
+    });
+  }
+
+  async function purgeArchivesCommand(request) {
+    const selected = archivePurgeSelection(await core.searchManagedArchives(), request);
+    const signature = JSON.stringify(selected.map(item => [item.id, item.startTime || '', item.filename || '']));
+    const stored = await chrome.storage.local.get({ [pendingArchiveKey]: null });
+    const previous = stored[pendingArchiveKey];
+    const token = id();
+    const pending = { token, signature, expiresAt: Date.now() + planLifetimeMs };
+    await chrome.storage.local.set({ [pendingArchiveKey]: pending });
+    const preview = {
+      planToken: token,
+      expiresAt: new Date(pending.expiresAt).toISOString(),
+      lifetimeMinutes: planLifetimeMs / 60000,
+      deleteCount: selected.length,
+      archives: selected.map(item => ({ id: item.id, filename: item.filename, startTime: item.startTime }))
+    };
+    if (request.confirmed !== true) return preview;
+    if (!previous || previous.signature !== signature || Date.now() > previous.expiresAt) {
+      throw failure('还没有与当前备份范围一致的预览。请先确认返回的清单，再执行同一命令。', 'PREVIEW_REQUIRED', preview);
+    }
+    const cleanup = await core.removeManagedArchives(selected);
+    await chrome.storage.local.remove(pendingArchiveKey);
+    return { ...preview, deletedCount: cleanup.removed.length, warnings: cleanup.warnings };
   }
 
   async function dispatch(request) {
@@ -724,6 +809,7 @@ importScripts('shared.js', 'bridge-config.js');
     if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 300000) throw failure('归档超时必须在 1–300 秒之间。', 'INVALID_TIMEOUT');
     if (command === 'backup') return exclusive(() => createBackup(timeoutMs));
     if (command === 'downloads.list') return { downloads: await core.archiveDiagnostics() };
+    if (command === 'archives.purge') return exclusive(() => purgeArchivesCommand(request));
     if (command === 'archives.list') {
       const archives = await core.listManagedArchives();
       return { archives: archives.map(item => ({ id: item.id, filename: item.filename, startTime: item.startTime, fileSize: item.fileSize })) };

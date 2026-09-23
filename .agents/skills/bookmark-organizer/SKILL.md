@@ -73,7 +73,7 @@ python scripts/audit_bookmarks.py --input <Bookmarks-or-export.html> --output-di
 用户表示已经删完后，重新扫描并只处理 `待删除`。如果这个文件夹已经不存在，直接告诉用户即可，不要重建。
 
 1. 里面还有书签：按内容放回合适的已有目录；没有合适目录时再建窄而清晰的新目录。只移动仍留在 `待删除` 里的条目。
-2. 里面没有书签，或剩余条目已经移走、目录变为空：删除 `待删除` 文件夹本身。用 `--path` 指定这一处，先预览确认它为空，再加 `--confirmed`。不要用不带范围的 `--empty`，那会连带删掉其他空目录，包括故意留空的收件箱。
+2. 里面没有书签，或剩余条目已经移走、目录变为空：删除 `待删除` 文件夹本身。用 `--path` 指定这一处，先预览确认它为空，再加 `--confirmed`。不要用不带范围的 `--empty`，那会连带删掉其他空目录，包括故意留空、且没有被保护的收件箱。`临时收藏` 和 `回收站` 不会被这次清理删掉。
 
 只清理某一支里的空目录时，用 `--empty --path <那一支>`。要保住某些空目录时，重复 `--exclude <路径>`，不要靠写死目录名。
 
@@ -82,7 +82,7 @@ python scripts/bookmarkctl.py --pretty prune-folders --path "<收藏夹栏>/待�
 python scripts/bookmarkctl.py --pretty prune-folders --path "<收藏夹栏>/待删除" --confirmed
 ```
 
-用户点名要助手直接删除某些书签时，仍移入 `回收站`；只有明确要求永久删除时才使用 `--purge`。
+用户点名要助手直接删除某些书签时，仍移入 `回收站`；只有明确要求永久删除时才使用 `--purge`。`purge-recycle --older-than-days` 按进入回收站的时间计算；没有这条记录的条目会被跳过。工具栏“取消收藏”直接删除当前页的规范化匹配，不进入 `回收站`。清空备份文件用 `purge-archives`，先预览再确认，不改收藏夹。
 
 ## 删除与目录
 
@@ -94,7 +94,8 @@ python scripts/bookmarkctl.py --pretty prune-folders --empty
 python scripts/bookmarkctl.py --pretty prune-folders --empty --recursive --confirmed
 python scripts/bookmarkctl.py --pretty rename-folder --path "收藏夹栏/资料/CMake与Qt构建" --name "CMake"
 python scripts/bookmarkctl.py --pretty move-folder --path "收藏夹栏/前端技术收藏夹" --to "收藏夹栏" --index -1
-python scripts/bookmarkctl.py --pretty purge-recycle
+python scripts/bookmarkctl.py --pretty purge-recycle --older-than-days 7
+python scripts/bookmarkctl.py --pretty purge-archives --older-than-days 7
 ```
 
 不带 `--confirmed` 的命令只返回预览和 `planToken`。用户确认的必须是这份预览：原样重跑并加上 `--confirmed`。目录状态若已变化，扩展会拒绝执行并返回新预览。书签方案继续用 `apply-plan --plan-token`。`--empty` 只删除没有任何子项的目录；`--recursive` 会连同“下面只有空目录”的父目录一起删掉。非空目录必须指定 `--path` 和 `--recursive`，预览会写明书签数；默认把整棵目录移入回收站，只有 `--purge` 才永久删除。

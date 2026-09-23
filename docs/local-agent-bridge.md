@@ -27,7 +27,8 @@ Agent → bookmarkctl.py → 临时 127.0.0.1 页面 → Chromium 外部消息 �
 | `apply-plan --confirmed` | 先备份，再执行已校验计划（移动、软删除或永久删除） | 是 |
 | `prune-folders` | 预览空目录或指定目录的清理；加 `--confirmed` 才执行 | 仅在 `--confirmed` 时 |
 | `rename-folder` / `move-folder` | 预览目录重命名或移动；加 `--confirmed` 才执行 | 仅在 `--confirmed` 时 |
-| `purge-recycle` | 预览回收站清空；可用 `--older-than-days` 限定，加 `--confirmed` 才永久删除 | 仅在 `--confirmed` 时 |
+| `purge-recycle` | 预览回收站清空；`--older-than-days` 按进入回收站的时间限定，没有进入时间的条目会跳过。加 `--confirmed` 才永久删除 | 仅在 `--confirmed` 时 |
+| `purge-archives` | 预览将删除的本扩展备份；`--older-than-days`（0 表示全部）或 `--from`/`--until`。加 `--confirmed` 才删除文件 | 仅在 `--confirmed` 时，且不改收藏夹 |
 | `undo --confirmed` | 先备份，再撤销指定操作 | 是 |
 
 `validate-plan` 返回的 `planToken` 有效期为 30 分钟。重新执行校验会签发新令牌，旧令牌随即失效。执行时扩展会重新扫描，并比较计划条目的 ID、标题、URL、原父目录、原位置、原路径、目标路径和目录快照；这些状态发生变化、令牌不匹配或过期都会拒绝执行。其他位置的无关变化一般不影响计划；同一来源目录中的插入或重排会改变原位置，需重新校验。归档成功后还会再次校验，防止等待期间状态变化。
