@@ -1,6 +1,6 @@
 # 本地 Agent 桥接
 
-2.0 的目标是让 Claude Code、Codex、Cursor 等任何能运行本地命令的 Agent 使用同一套收藏夹接口，而不是适配每一种 Agent，也不依赖视觉点击插件页面。
+任何能跑本地命令的 Agent 都用同一套收藏夹接口，不必按 Agent 分别适配，也不必视觉点击插件页。
 
 ## 数据流
 
@@ -8,9 +8,7 @@
 Agent → bookmarkctl.py → 临时 127.0.0.1 页面 → Chromium 外部消息 → 扩展 → chrome.bookmarks
 ```
 
-`bookmarkctl.py` 在单次命令期间监听随机端口，使用指定 Chromium 浏览器打开一个约 420×240 的小型应用窗口。该本地页面向固定扩展 ID 发送请求，扩展校验安装器生成的随机令牌后执行并返回 JSON。收到结果后，本地服务立即关闭，窗口尝试自动关闭。Chromium 与 Edge 没有可用的启动最小化开关，窗口可能短暂出现在屏幕上或任务栏中；这不要求用户切换窗口或点击页面。
-
-这不是常驻服务器：没有固定监听端口，不接受局域网或公网请求，也不要求为 Claude、Codex、Cursor 分别安装适配器。
+`bookmarkctl.py` 只在本次命令监听随机端口，打开约 420×240 的窗口，用安装令牌向固定扩展 ID 要 JSON，然后关服务并尝试关窗；没有最小化开关，窗口可能闪一下，用户不必点击。它不是常驻服务，也不接受局域网或公网请求。
 
 ## 命令协议
 
@@ -31,13 +29,13 @@ Agent → bookmarkctl.py → 临时 127.0.0.1 页面 → Chromium 外部消息 �
 | `purge-archives` | 预览将删除的本扩展备份；`--older-than-days`（0 表示全部）或 `--from`/`--until`。加 `--confirmed` 才删除文件 | 仅在 `--confirmed` 时，且不改收藏夹 |
 | `undo --confirmed` | 先备份，再撤销指定操作 | 是 |
 
-`validate-plan` 返回的 `planToken` 有效期为 30 分钟。重新执行校验会签发新令牌，旧令牌随即失效。执行时扩展会重新扫描，并比较计划条目的 ID、标题、URL、原父目录、原位置、原路径、目标路径和目录快照；这些状态发生变化、令牌不匹配或过期都会拒绝执行。其他位置的无关变化一般不影响计划；同一来源目录中的插入或重排会改变原位置，需重新校验。归档成功后还会再次校验，防止等待期间状态变化。
+`planToken` 有效 30 分钟，重新校验会换新令牌。执行前和归档后都会再扫描：条目的 ID、标题、URL、原父目录、原位置、原路径、目标路径或目录快照变了，或令牌不匹配、过期，都会拒绝；同一来源目录里的插入或重排会改变原位置，无关位置的变化一般不影响。
 
 `scan` 和 `folders` 还返回 `scannedAt` 与 `checksum`。离线审计条数和稍后的实时扫描不一致时，用这两个字段判断扫描是否已经过期，不要继续使用旧 ID。
 
-`--confirmed` 会让 CLI 在请求中加入明确确认标记，扩展侧也会独立拒绝缺少该标记的移动和撤销请求。它用于避免程序误调用，不是对“真人身份”的密码学证明；是否获得用户授权仍由 Agent 技能和当前对话约束。
+`--confirmed` 只是避免程序误调用的确认标记，扩展会拒绝没有它的移动和撤销；它不能证明是真人授权，授权仍看当前对话。
 
-正常日常整理使用 `scan`、`validate-plan`、`apply-plan`；执行器核验逐项结果，异常时再查询。全库整理必须显式使用 `scan --scope all` 和 `validate-plan --scope all`；`planToken` 会记录范围，`apply-plan` 以令牌中的范围为准。`apply-plan` 自己会先备份，调用方不得再提前调用 `backup`。`status`、`archives` 和 `operations` 不是固定前置步骤；仅在故障诊断、用户查询或核对不确定执行结果时使用。
+日常整理是 `scan → validate-plan → apply-plan`；全库必须显式 `--scope all`，`apply-plan` 以令牌里的范围为准，并自己先备份。`status`、`archives`、`operations` 只用于查询或排障。
 
 Windows 上如果宿主工具不可靠地回传 stdout，所有命令都可以使用全局参数 `--output <文件>`。`--output`、`--pretty` 可写在子命令之前或之后，例如 `python scripts/bookmarkctl.py --pretty --output "$env:TEMP\bookmark-scan.json" scan`，再读取该无 BOM UTF-8 文件。路径可写时，成功与失败都会写入该文件（失败为 `ok: false`）；`--output` 和 `--file` 路径中的 `~` 都会展开。计划文件必须是 UTF-8，读取兼容带 BOM 和无 BOM；详见[本地执行扩展](../.agents/skills/bookmark-organizer/references/local-extension.md)中的 Windows 编码说明。
 
@@ -72,4 +70,4 @@ python scripts/bookmarkctl.py --pretty status
 3. 确认浏览器与安装时选择的 `edge`、`chrome` 或 `brave` 一致。
 4. 运行 `installer/doctor.ps1` 检查版本、固定扩展 ID、localhost 来源以及 CLI/扩展两侧令牌是否一致。
 
-不要把连接问题改造成浏览器视觉自动化或临时解析 `Bookmarks` 的脚本；修复桥接后继续使用同一命令协议。
+连接问题修好桥接后继续用同一套命令，不要改成视觉点击或临时解析 `Bookmarks`。
