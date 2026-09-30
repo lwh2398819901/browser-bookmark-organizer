@@ -26,8 +26,6 @@
   const archiveUntil = document.querySelector('#archive-until');
   const purgeArchivesButton = document.querySelector('#purge-archives');
   const archiveList = document.querySelector('#archive-list');
-  const restoreGuide = document.querySelector('#restore-guide');
-  const restoreFile = document.querySelector('#restore-file');
   const scanButton = document.querySelector('#scan');
   const copyAgentButton = document.querySelector('#copy-agent');
   const scanStatus = document.querySelector('#scan-status');
@@ -47,6 +45,8 @@
   const clearHistoryButton = document.querySelector('#clear-history');
   const historyList = document.querySelector('#history-list');
   const versionBadge = document.querySelector('.version');
+  const helpButton = document.querySelector('#help');
+  const helpDialog = document.querySelector('#help-dialog');
 
   function createElement(tag, className = '', text = '') {
     const node = document.createElement(tag);
@@ -56,6 +56,7 @@
   }
 
   function setMessage(node, text, kind = '') {
+    if (!node) return;
     node.textContent = text;
     node.className = `message${kind ? ` ${kind}` : ''}`;
   }
@@ -150,29 +151,36 @@
         archiveList.append(createElement('p', 'empty', '尚无本扩展创建的备份。'));
         return;
       }
+      let labels = {};
+      try { labels = await core.archiveLabels(); } catch { labels = {}; }
       for (const archive of archives) {
         const row = createElement('article', 'archive-item');
         const content = createElement('div');
-        const title = core.formatDate(archive.startTime);
         const state = archive.exists === false ? '文件已被移动或删除' : '文件存在';
-        content.append(createElement('p', 'item-title', title));
+        const name = document.createElement('input');
+        name.className = 'archive-name';
+        name.type = 'text';
+        name.maxLength = 80;
+        name.value = labels[String(archive.id)] || '';
+        name.placeholder = core.formatDate(archive.startTime);
+        name.setAttribute('aria-label', '备份名称');
+        name.addEventListener('change', async () => {
+          try {
+            await core.setArchiveLabel(archive.id, name.value);
+            setMessage(backupStatus, name.value.trim() ? '名称已保存。' : '已改回按时间显示。', 'success');
+          } catch (error) {
+            setMessage(backupStatus, `名称没有保存：${error.message}`, 'error');
+          }
+        });
+        content.append(name);
         content.append(createElement('p', 'item-meta', `${core.formatBytes(archive.fileSize ?? archive.totalBytes)} · ${state}`));
         content.append(createElement('p', 'item-meta', archive.filename || '路径未知'));
         const actions = createElement('div', 'archive-actions');
         const show = createElement('button', '', '显示文件');
         show.disabled = archive.exists === false;
         show.addEventListener('click', () => chrome.downloads.show(archive.id));
-        const copy = createElement('button', '', '复制路径');
-        copy.addEventListener('click', async () => {
-          await navigator.clipboard.writeText(archive.filename || '');
-          setMessage(backupStatus, '备份文件路径已复制。', 'success');
-        });
-        const restore = createElement('button', '', '恢复方法');
-        restore.addEventListener('click', () => {
-          restoreFile.textContent = archive.filename || '路径未知';
-          restoreGuide.hidden = false;
-          globalThis.scrollTo?.({ top: Math.max(0, restoreGuide.offsetTop - 24), behavior: 'smooth' });
-        });
+        const restore = createElement('button', '', '恢复这份备份');
+        restore.addEventListener('click', () => restoreArchive(archive, restore, row));
         const remove = createElement('button', 'danger-button', '删除备份');
         remove.addEventListener('click', async () => {
           remove.disabled = true;
@@ -180,14 +188,13 @@
             await chrome.downloads.removeFile(archive.id);
             await chrome.downloads.erase({ id: archive.id });
             setMessage(backupStatus, '指定备份已删除；收藏夹没有改变。', 'success');
-            restoreGuide.hidden = true;
             await refreshArchives();
           } catch (error) {
             setMessage(backupStatus, `删除备份失败：${error.message}`, 'error');
             remove.disabled = false;
           }
         });
-        actions.append(show, copy, restore, remove);
+        actions.append(show, restore, remove);
         row.append(content, actions);
         archiveList.append(row);
       }
@@ -384,6 +391,7 @@
   }
 
   async function renderHistory() {
+    if (!historyList) return;
     historyList.replaceChildren(createElement('p', 'empty', '正在读取操作记录…'));
     const operations = await operationStore.load();
     historyList.replaceChildren();
@@ -443,10 +451,116 @@
     }
   }
 
+  function backupFileUrl(filename) {
+    const parts = String(filename || '').split(/[/\\]/).filter(Boolean);
+    if (!parts.length) return '';
+    const drive = /:$/.test(parts[0]) ? parts.shift() : '';
+    return `file:///${drive ? `${drive}/` : ''}${parts.map(encodeURIComponent).join('/')}`;
+  }
+
+  async function fetchBackupFile(filename) {
+    const response = await fetch(backupFileUrl(filename));
+    if (!response.ok) throw new Error('无法读取备份文件。');
+    const text = await response.text();
+    if (!/<DL[\s>]/i.test(text)) throw new Error('这个文件不是收藏夹备份。');
+    return text;
+  }
+
+  async function readBackupFromDirectory(dirHandle, filename) {
+    const base = String(filename || '').split(/[/\\]/).pop();
+    const directories = [dirHandle];
+    try { directories.push(await dirHandle.getDirectoryHandle(core.archiveDirectory)); } catch { /* 选中的就是备份文件夹。 */ }
+    for (const directory of directories) {
+      try {
+        const fileHandle = await directory.getFileHandle(base);
+        return await (await fileHandle.getFile()).text();
+      } catch { /* 换下一个位置。 */ }
+    }
+    throw new Error('选中的文件夹里没有这个备份文件。');
+  }
+
+  async function grantedArchiveDirectory() {
+    let handle = null;
+    try { handle = await core.loadArchiveDirectory(); } catch { return null; }
+    if (!handle) return null;
+    const state = await handle.queryPermission({ mode: 'read' });
+    if (state === 'granted') return handle;
+    if (state === 'prompt' && await handle.requestPermission({ mode: 'read' }) === 'granted') return handle;
+    return null;
+  }
+
+  async function htmlForArchive(archive, allowPicker) {
+    try {
+      const stored = await core.loadArchive(archive.id);
+      if (stored) return stored;
+    } catch { /* 继续读磁盘上的备份文件。 */ }
+    try { return await fetchBackupFile(archive.filename); } catch { /* 浏览器可能不允许直接读下载目录。 */ }
+    const known = await grantedArchiveDirectory();
+    if (known) return readBackupFromDirectory(known, archive.filename);
+    if (!allowPicker) throw new Error('需要选择备份文件夹。');
+    const picked = await showDirectoryPicker({ id: 'bookmark-organizer-archives', mode: 'read', startIn: 'downloads' });
+    try { await core.saveArchiveDirectory(picked); } catch { /* 这次读到文件即可。 */ }
+    return readBackupFromDirectory(picked, archive.filename);
+  }
+
+  let restoreChoice = null;
+
+  function askRestoreChoice(row) {
+    restoreChoice?.remove();
+    return new Promise(resolve => {
+      const box = createElement('div', 'restore-choice');
+      box.append(createElement('p', 'item-meta', '要先把现在的收藏夹备份下来吗？不备份也可以直接恢复。'));
+      const actions = createElement('div', 'archive-actions');
+      const save = createElement('button', 'primary', '先备份再恢复');
+      const direct = createElement('button', '', '直接恢复');
+      const cancel = createElement('button', '', '取消');
+      const finish = choice => {
+        box.remove();
+        if (restoreChoice === box) restoreChoice = null;
+        resolve(choice);
+      };
+      save.addEventListener('click', () => finish('save'));
+      direct.addEventListener('click', () => finish('direct'));
+      cancel.addEventListener('click', () => finish('cancel'));
+      actions.append(save, direct, cancel);
+      box.append(actions);
+      row.append(box);
+      restoreChoice = box;
+    });
+  }
+
+  async function restoreArchive(archive, button, row) {
+    if (archive.exists === false) {
+      setMessage(backupStatus, '备份文件已经不在，无法恢复。', 'error');
+      return;
+    }
+    const choice = await askRestoreChoice(row);
+    if (choice === 'cancel') return;
+    button.disabled = true;
+    try {
+      setMessage(backupStatus, '正在读取这份备份…');
+      const html = await htmlForArchive(archive, true);
+      let saved = '';
+      if (choice === 'save') {
+        const safety = await background({ command: 'backup' });
+        saved = `刚才的收藏夹已另存为「${safety.label}」。`;
+      }
+      setMessage(backupStatus, '正在恢复…');
+      await core.replaceBookmarksFromHtml(html);
+      setMessage(backupStatus, `已用这份备份恢复。${saved}`, 'success');
+      await Promise.all([refreshOverview(), refreshArchives()]);
+    } catch (error) {
+      const cancelled = String(error.message || '').includes('已取消备份');
+      setMessage(backupStatus, cancelled ? '已取消，收藏夹没有改变。' : `恢复没有完成：${error.message}`, cancelled ? '' : 'error');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   async function runBackup() {
     try {
       backupButton.disabled = true;
-      setMessage(backupStatus, '正在备份当前全部收藏夹…');
+      setMessage(backupStatus, '请确认这次备份的名称…');
       const response = await background({ command: 'backup' });
       const archive = { ...response, ...response.stats };
       const cleanup = { removed: Array(response.removedOldArchives).fill(''), warnings: response.warnings };
@@ -455,11 +569,11 @@
     } catch (error) {
       setMessage(backupStatus, `备份失败：${error.message}\n本次没有修改收藏夹。`, 'error');
     } finally {
-      backupButton.disabled = false;
+      if (backupButton) backupButton.disabled = false;
     }
   }
 
-  backupButton.addEventListener('click', runBackup);
+  if (backupButton) backupButton.addEventListener('click', runBackup);
 
   function purgeUsesRange() {
     return Boolean(archiveFrom.value || archiveUntil.value);
@@ -488,7 +602,6 @@
       const cleanup = await core.removeManagedArchives(selected);
       const failed = cleanup.warnings.length ? ` ${cleanup.warnings.length} 份未能删除。` : '';
       setMessage(backupStatus, `已清空 ${cleanup.removed.length} 份备份。${failed}收藏夹没有改变。`, cleanup.warnings.length ? 'error' : 'success');
-      restoreGuide.hidden = true;
       await refreshArchives();
     } catch (error) {
       setMessage(backupStatus, `清空备份失败：${error.message}`, 'error');
@@ -505,7 +618,7 @@
 
   refreshArchivesButton.addEventListener('click', refreshArchives);
 
-  scanButton.addEventListener('click', async () => {
+  if (scanButton) scanButton.addEventListener('click', async () => {
     try {
       scanButton.disabled = true;
       setMessage(scanStatus, '正在扫描…');
@@ -520,7 +633,7 @@
     }
   });
 
-  copyAgentButton.addEventListener('click', async () => {
+  if (copyAgentButton) copyAgentButton.addEventListener('click', async () => {
     if (!scan) return;
     const payload = {
       task: `请使用 bookmark-organizer 技能理解下列网页内容，并为每条临时收藏选择合适目录。优先复用现有目录；如需新建目录应保持稳定清晰。不要删除书签。只返回 JSON 数组，每项为 {"id":"…","folderPath":"${scan.bookmarkBar?.title || 'bookmarks_bar'}/…"}。`,
@@ -537,7 +650,7 @@
     setMessage(scanStatus, '整理任务已复制。粘贴给 Agent；完成后把它的整段回复粘贴到“使用 Agent 自动分类”。', 'success');
   });
 
-  buildManualPlanButton.addEventListener('click', async () => {
+  if (buildManualPlanButton) buildManualPlanButton.addEventListener('click', async () => {
     try {
       const selectedIds = [...temporaryList.querySelectorAll('input[type="checkbox"]:checked')].map(input => input.dataset.bookmarkId);
       if (!selectedIds.length) throw new Error('请先选择至少一条临时收藏。');
@@ -553,7 +666,7 @@
     }
   });
 
-  validatePlanButton.addEventListener('click', async () => {
+  if (validatePlanButton) validatePlanButton.addEventListener('click', async () => {
     try {
       await renderPlan(validatePlan());
     } catch (error) {
@@ -562,16 +675,16 @@
     }
   });
 
-  planInput.addEventListener('input', () => {
+  if (planInput) planInput.addEventListener('input', () => {
     clearPlan('方案内容已改变，请重新校验。');
   });
 
-  clearPlanButton.addEventListener('click', () => {
+  if (clearPlanButton) clearPlanButton.addEventListener('click', () => {
     planInput.value = '';
     clearPlan('整理方案已清除。');
   });
 
-  applyButton.addEventListener('click', async () => {
+  if (applyButton) applyButton.addEventListener('click', async () => {
     if (!validatedPlan) return;
     try {
       applyButton.disabled = true;
@@ -588,14 +701,14 @@
       setMessage(result, `执行中断：${error.message}。请查看操作记录，不要直接重复执行。`, 'error');
       await renderHistory();
     } finally {
-      backupButton.disabled = false;
+      if (backupButton) backupButton.disabled = false;
       applyButton.disabled = !validatedPlan;
     }
   });
 
-  refreshHistoryButton.addEventListener('click', renderHistory);
+  if (refreshHistoryButton) refreshHistoryButton.addEventListener('click', renderHistory);
 
-  clearHistoryButton.addEventListener('click', async () => {
+  if (clearHistoryButton) clearHistoryButton.addEventListener('click', async () => {
     const operations = await operationStore.load();
     if (!operations.length) {
       setMessage(result, '当前没有可清除的操作记录。');
@@ -606,13 +719,27 @@
     setMessage(result, '操作记录已清空；收藏夹和备份文件没有改变。', 'success');
   });
 
+  chrome.downloads.onChanged.addListener(async delta => {
+    if (delta.state?.current !== 'complete') return;
+    const item = (await chrome.downloads.search({ id: delta.id }))[0];
+    if (!item || !core.isManagedArchive(item)) return;
+    await Promise.allSettled([refreshOverview(), refreshArchives()]);
+  });
+
+  if (helpButton && helpDialog?.showModal) {
+    helpButton.addEventListener('click', () => helpDialog.showModal());
+    document.querySelector('#close-help')?.addEventListener('click', () => helpDialog.close());
+  }
+
   async function initializeManager() {
     if (versionBadge) {
       try {
         versionBadge.textContent = chrome.runtime.getManifest().version;
       } catch { /* 读取不到时保留占位符 */ }
     }
-    await Promise.allSettled([refreshOverview(), refreshArchives(), renderHistory()]);
+    const startup = [refreshOverview(), refreshArchives()];
+    if (historyList) startup.push(renderHistory());
+    await Promise.allSettled(startup);
   }
 
   initializeManager();

@@ -21,11 +21,19 @@ p { margin: 0; }
 .muted { color: var(--muted); }
 .single-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .state { min-height: 17px; margin-top: 5px; color: var(--muted); font-size: 11px; white-space: pre-wrap; }
-button.site-line { display: block; width: 100%; min-height: 0; margin-top: 2px; padding: 0; border: 0; background: transparent; color: var(--muted); font-weight: 500; text-align: left; white-space: normal; }
-button.site-line:hover:not(:disabled) { border: 0; color: var(--accent); }
+button.site-line { display: block; width: 100%; min-height: 0; margin-top: 4px; padding: 4px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-weight: 650; text-align: left; white-space: normal; }
+button.site-line:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); cursor: pointer; }
+button.site-line:not(:disabled)::after { content: "查看"; display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 999px; background: Canvas; font-size: 10px; font-weight: 750; line-height: 16px; }
+button.site-line[aria-expanded="true"]::after { content: "收起"; }
+button.site-line:hover:not(:disabled) { border: 0; }
 button.site-line:disabled { opacity: 1; cursor: default; }
-.site-samples { margin: 4px 0 0; padding: 0 0 0 16px; color: var(--muted); font-size: 11px; }
-.site-samples li { margin: 2px 0; }
+.site-samples, .duplicate-list { margin: 6px 0 0; padding: 0; list-style: none; color: CanvasText; font-size: 11px; }
+.site-samples li, .duplicate-list li { margin: 0; padding: 5px 0; border-top: 1px solid var(--border); }
+.duplicate-list { max-height: 180px; overflow: auto; }
+button.bookmark-link { display: block; width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; color: var(--accent); font-weight: 700; text-align: left; text-decoration: underline; text-underline-offset: 2px; white-space: normal; overflow-wrap: anywhere; cursor: pointer; }
+button.bookmark-link:hover:not(:disabled) { border: 0; }
+button.inline-danger { min-height: 28px; margin-top: 6px; padding: 3px 10px; border-color: #b42318; background: transparent; color: #b42318; font-size: 12px; }
+button.inline-danger:hover:not(:disabled) { border-color: #b42318; background: #b42318; color: white; }
 .state.success { color: #18794e; }
 .state.error { color: #b42318; }
 button { min-height: 32px; border: 1px solid var(--border); border-radius: 7px; padding: 5px 9px; background: Canvas; color: CanvasText; cursor: pointer; font: inherit; font-weight: 650; }
@@ -39,7 +47,13 @@ button.primary.danger:hover:not(:disabled) { background: #b42318; color: white; 
 .close-button { width: 28px; min-height: 28px; border: 0; padding: 0; background: transparent; color: var(--muted); font-size: 20px; font-weight: 400; }
 .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin: 7px 0; }
 .metric { display: flex; align-items: baseline; gap: 6px; border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; }
+button.metric { width: 100%; min-height: 0; background: Canvas; font-weight: inherit; text-align: left; }
+button.metric:not(:disabled) { cursor: pointer; }
+button.metric:not(:disabled) small::after { content: " · 查看"; color: var(--accent); }
+button.metric:disabled { opacity: 1; cursor: default; }
 .metric span { font-size: 17px; font-weight: 750; }
 .metric small { color: var(--muted); }
+.duplicate-list { margin: 0 0 7px; }
+.duplicate-list p, .site-samples p { overflow-wrap: anywhere; }
 .backup-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; border-top: 1px solid var(--border); padding-top: 9px; }
 .backup-card .state { grid-column: 1 / -1; margin: 0; }

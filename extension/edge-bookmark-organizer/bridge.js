@@ -315,9 +315,40 @@ importScripts('shared.js', 'bridge-config.js');
     return parentId;
   }
 
-  async function createBackup(timeoutMs) {
+  function askBackupName(defaultName) {
+    if (typeof chrome.windows?.create !== 'function') return Promise.resolve(defaultName);
+    const url = `${chrome.runtime.getURL('backup-name.html')}#name=${encodeURIComponent(defaultName)}`;
+    return new Promise((resolve, reject) => {
+      let windowId = null;
+      let settled = false;
+      const finish = (settle, value) => {
+        if (settled) return;
+        settled = true;
+        chrome.runtime.onMessage.removeListener(onMessage);
+        chrome.windows.onRemoved.removeListener(onRemoved);
+        if (windowId != null) chrome.windows.remove(windowId).catch(() => {});
+        settle(value);
+      };
+      const onMessage = message => {
+        if (message?.type !== 'bookmark-organizer-backup-name') return;
+        if (message.cancelled) finish(reject, new Error('已取消备份'));
+        else finish(resolve, String(message.name || '').trim() || defaultName);
+      };
+      const onRemoved = id => {
+        if (id === windowId) finish(reject, new Error('已取消备份'));
+      };
+      chrome.runtime.onMessage.addListener(onMessage);
+      chrome.windows.onRemoved.addListener(onRemoved);
+      chrome.windows.create({ url, type: 'popup', width: 420, height: 360, focused: true }).then(created => {
+        windowId = created?.id ?? null;
+      }).catch(error => finish(reject, error));
+    });
+  }
+
+  async function createBackup(timeoutMs, label) {
+    const chosen = String(label || '').trim() || await askBackupName(core.defaultBackupName());
     try {
-      const archive = await core.archiveCurrentBookmarks(timeoutMs);
+      const archive = await core.archiveCurrentBookmarks(timeoutMs, chosen);
       let cleanup;
       try { cleanup = await core.trimArchives(); }
       catch (error) { cleanup = { removed: [], warnings: [`归档成功，保留清理失败：${error.message}`] }; }
@@ -326,7 +357,8 @@ importScripts('shared.js', 'bridge-config.js');
         downloadId: archive.downloadId,
         stats: { bookmarks: archive.bookmarks, folders: archive.folders },
         removedOldArchives: cleanup.removed.length,
-        warnings: cleanup.warnings
+        warnings: cleanup.warnings,
+        label: chosen
       };
     } catch (error) {
       throw failure(`归档失败，未执行任何收藏夹变更：${error?.message || String(error)}`, error.code || 'ARCHIVE_FAILED', error.details);
@@ -807,7 +839,7 @@ importScripts('shared.js', 'bridge-config.js');
     if (command === 'scan') return publicScan(await scanBookmarks(request.scope || 'temporary'));
     const timeoutMs = request.archiveTimeoutMs ?? 30000;
     if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 300000) throw failure('归档超时必须在 1–300 秒之间。', 'INVALID_TIMEOUT');
-    if (command === 'backup') return exclusive(() => createBackup(timeoutMs));
+    if (command === 'backup') return exclusive(() => createBackup(timeoutMs, request.label));
     if (command === 'downloads.list') return { downloads: await core.archiveDiagnostics() };
     if (command === 'archives.purge') return exclusive(() => purgeArchivesCommand(request));
     if (command === 'archives.list') {

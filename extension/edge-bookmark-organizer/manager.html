@@ -12,9 +12,12 @@
       <div>
         <p class="eyebrow">本地、安全、可回退</p>
         <h1>收藏夹整理中心</h1>
-        <p class="lead">插件负责备份、预览和执行；网页内容理解与分类判断交给 Agent。</p>
+        <p class="lead">整理由 Agent 完成。这里查看、命名和恢复备份。</p>
       </div>
-      <span class="version" title="扩展版本">—</span>
+      <div class="header-tools">
+        <button id="help" type="button">帮助</button>
+        <span class="version" title="扩展版本">—</span>
+      </div>
     </header>
 
     <section class="overview" aria-label="收藏夹概况">
@@ -28,11 +31,11 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">备份与恢复</p>
-          <h2>给当前状态留一份保险</h2>
-          <p>一键导出完整 HTML；本扩展自动维护最近 30 份。也可按天数或日期清空这些备份文件。</p>
+          <h2>已保存的备份</h2>
+          <p>「立即备份」导出当前收藏夹。整理和撤销之前也会自动备份，并保留最近 30 份。</p>
         </div>
         <div class="actions">
-          <button id="backup" class="primary">一键备份收藏夹</button>
+          <button id="backup" class="primary">立即备份</button>
           <button id="refresh-archives">刷新列表</button>
         </div>
       </div>
@@ -48,90 +51,35 @@
       </div>
       <p id="backup-status" class="message" role="status"></p>
       <div id="archive-list" class="archive-list" aria-live="polite"></div>
-      <aside id="restore-guide" class="restore-guide" hidden>
-        <div>
-          <strong>从这份 HTML 恢复</strong>
-          <p id="restore-file"></p>
-        </div>
-        <ol>
-          <li>先保留当前状态：如有需要，再点一次“一键备份收藏夹”。</li>
-          <li>点击对应备份的“显示文件”，在资源管理器中找到 HTML。</li>
-          <li>打开浏览器的“导入浏览器数据”，选择“收藏夹或书签 HTML 文件”。</li>
-          <li>导入会与当前收藏夹合并；导入后检查是否出现重复目录。</li>
-        </ol>
-        <p class="warning">浏览器没有向扩展开放原生 HTML 导入接口，因此这里不会自动清空或覆盖当前收藏夹。</p>
-      </aside>
-    </section>
-
-    <section class="panel" id="temporary-panel">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">待整理</p>
-          <h2>整理“临时收藏”</h2>
-          <p>Agent 默认通过本地命令自动处理；本页保留扫描、手动归类和复制方案作为备用。</p>
-        </div>
-        <div class="actions">
-          <button id="scan" class="primary">扫描临时收藏</button>
-          <button id="copy-agent" disabled>复制整理任务给 Agent</button>
-        </div>
-      </div>
-      <p id="scan-status" class="message" role="status">尚未扫描。</p>
-      <div id="temporary-list" class="bookmark-list"></div>
-      <div id="manual-tools" class="manual-tools" hidden>
-        <label for="manual-target">把选中的书签移动到</label>
-        <div class="target-row">
-          <input id="manual-target" list="folder-options" placeholder="收藏夹栏/开发/Git">
-          <datalist id="folder-options"></datalist>
-          <button id="build-manual-plan">生成整理方案</button>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel" id="plan-panel">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">整理方案</p>
-          <h2>先看清楚，再执行</h2>
-          <p>方案会转换成逐条移动预览；执行前还会重新扫描并自动备份。</p>
-        </div>
-      </div>
-      <div id="plan-summary" class="plan-summary empty">尚未生成或导入整理方案。</div>
-      <div id="plan-preview" class="plan-preview"></div>
-      <div class="actions execute-actions">
-        <button id="apply" class="primary" disabled>备份并执行整理</button>
-        <button id="clear-plan" disabled>清除方案</button>
-      </div>
-
-      <details class="advanced">
-        <summary>使用 Agent 自动分类</summary>
-        <p class="advanced-note">只有希望 Agent 阅读网页并自动判断目录时才需要这里；手动归类可以忽略本区域。</p>
-        <ol class="agent-steps">
-          <li>先在上方扫描临时收藏，然后点击“复制整理任务给 Agent”。</li>
-          <li>切换到已安装本技能的 Agent，粘贴任务并让它完成分析。</li>
-          <li>把 Agent 的整段回复粘贴到下方，再生成可视化预览。</li>
-        </ol>
-        <label for="plan">Agent 的回复</label>
-        <textarea id="plan" spellcheck="false" placeholder="直接粘贴 Agent 的完整回复；包含说明文字或 Markdown 代码块也可以。"></textarea>
-        <button id="validate-plan">提取方案并生成预览</button>
-      </details>
-      <p id="result" class="message" role="status"></p>
-    </section>
-
-    <section class="panel" id="history-panel">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">操作记录</p>
-          <h2>撤销插件执行过的整理</h2>
-          <p>撤销只把书签移回原目录；不会删除整理时创建的空文件夹。</p>
-        </div>
-        <div class="actions">
-          <button id="refresh-history">刷新记录</button>
-          <button id="clear-history">清空记录</button>
-        </div>
-      </div>
-      <div id="history-list" class="history-list"></div>
     </section>
   </main>
+  <dialog id="help-dialog" class="help">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">帮助</p>
+        <h2>怎么用</h2>
+      </div>
+      <button id="close-help" type="button">关闭</button>
+    </div>
+    <h3>插件</h3>
+    <ul>
+      <li>点工具栏图标。当前页没收藏时，加入「临时收藏」；已经收藏时，按钮是「取消收藏」，并显示它在哪个目录。</li>
+      <li>同站还有别的收藏时，点那一行可以展开，再点标题就打开那个网页。重复链接也可以在这里展开后取消收藏。</li>
+      <li>工具栏和本页的「立即备份」都会先弹出名称。默认是当前时间，可以改，也可以直接确定。</li>
+      <li>备份列表里的名称可以直接改。每份备份可以显示文件、恢复或删除。也可以按天数或日期清空旧备份。</li>
+      <li>点「恢复这份备份」后，可以选择先备份现在的收藏夹，或直接用该文件替换。不备份也可以恢复。</li>
+    </ul>
+    <h3>Agent</h3>
+    <p>在已经能读到本技能的 Agent 里直接说目标。它会通过本机扩展读取收藏夹；要移动时会先给你看方案，你同意后才执行。</p>
+    <ul>
+      <li>整理临时收藏，或把刚存的归类。</li>
+      <li>整理整个收藏夹。</li>
+      <li>检查重复、检查失效链接、生成收藏夹画像。</li>
+      <li>把指定的书签移到某个目录。</li>
+      <li>撤销上次整理。撤销不在这个页面上，跟 Agent 说即可。</li>
+    </ul>
+    <p>可以删的书签会集中到收藏夹栏的「待删除」，由你在浏览器里手工删除。删完后告诉 Agent，它再收尾。</p>
+  </dialog>
   <script src="shared.js"></script>
   <script src="manager.js"></script>
 </body>

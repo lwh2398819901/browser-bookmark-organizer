@@ -31,11 +31,12 @@
         <span id="temporary-count">—</span>
         <small>临时收藏</small>
       </div>
-      <div class="metric">
+      <button id="duplicate-metric" class="metric" type="button" disabled aria-expanded="false">
         <span id="duplicate-count">—</span>
         <small>重复链接</small>
-      </div>
+      </button>
     </section>
+    <ul id="duplicate-list" class="duplicate-list" hidden></ul>
 
     <section class="backup-card" aria-labelledby="backup-heading">
       <div><p class="section-label" id="backup-heading">安全备份</p><p id="latest-backup" class="muted">正在查找…</p></div>

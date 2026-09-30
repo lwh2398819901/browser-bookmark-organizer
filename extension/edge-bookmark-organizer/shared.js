@@ -56,46 +56,46 @@
     return folders[folders.length - 1] || '收藏夹栏';
   }
 
+  function bookmarkFolderPath(bookmark) {
+    const folders = (bookmark.path || []).slice(0, -1);
+    return folders.length ? folders.join(' / ') : '收藏夹栏';
+  }
+
   function siteFootprint(bookmarks, url) {
     const site = siteKey(url);
     const pageCanonical = canonicalUrl(url);
     const onSite = site ? bookmarks.filter(item => siteKey(item.url) === site) : [];
     const folderCounts = new Map();
     for (const item of onSite) {
-      const name = bookmarkFolderName(item);
-      folderCounts.set(name, (folderCounts.get(name) || 0) + 1);
+      const path = bookmarkFolderPath(item);
+      folderCounts.set(path, (folderCounts.get(path) || 0) + 1);
     }
+    const folders = [...folderCounts.entries()]
+      .map(([path, count]) => ({ path, count }))
+      .sort((left, right) => right.count - left.count || left.path.localeCompare(right.path, 'zh'));
     let home = null;
     let homeCount = 0;
-    for (const [name, count] of folderCounts) {
-      if (count > homeCount) {
-        home = name;
-        homeCount = count;
+    for (const folder of folders) {
+      if (folder.count > homeCount) {
+        home = folder.path.split(' / ').pop();
+        homeCount = folder.count;
       }
     }
     const concentrated = onSite.length > 0 && homeCount * 2 > onSite.length;
-    const currentFolders = new Set(onSite.filter(item => item.canonical === pageCanonical).map(bookmarkFolderName));
-    const seen = new Set();
-    const samples = [];
-    const ranked = [...onSite].sort((left, right) => {
-      const leftNear = currentFolders.has(bookmarkFolderName(left)) ? 0 : 1;
-      const rightNear = currentFolders.has(bookmarkFolderName(right)) ? 0 : 1;
-      if (leftNear !== rightNear) return leftNear - rightNear;
-      return Number(left.canonical === pageCanonical) - Number(right.canonical === pageCanonical);
-    });
-    for (const item of ranked) {
-      if (item.canonical === pageCanonical || seen.has(item.canonical)) continue;
-      seen.add(item.canonical);
-      samples.push({ title: item.title || item.url, folder: bookmarkFolderName(item) });
-      if (samples.length === 3) break;
-    }
+    const pages = onSite.map(item => ({
+      title: item.title || item.url,
+      url: item.url,
+      path: bookmarkFolderPath(item),
+      current: item.canonical === pageCanonical
+    })).sort((left, right) => Number(right.current) - Number(left.current) || left.path.localeCompare(right.path, 'zh') || left.title.localeCompare(right.title, 'zh'));
     return {
       count: onSite.length,
       otherCount: onSite.filter(item => item.canonical !== pageCanonical).length,
       uniquePages: new Set(onSite.map(item => item.canonical)).size,
-      folderCount: folderCounts.size,
+      folderCount: folders.length,
       home: concentrated ? home : null,
-      samples
+      folders,
+      pages
     };
   }
 
@@ -261,6 +261,190 @@
     return `${indent}<DT><H3${dateAttribute('ADD_DATE', node.dateAdded)}${dateAttribute('LAST_MODIFIED', node.dateGroupModified)}${folderAttribute}>${title}</H3>\n${indent}<DL><p>\n${children}${indent}</DL><p>\n`;
   }
 
+  function decodeHtml(value) {
+    return String(value || '')
+      .replace(/&quot;/g, '"')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&');
+  }
+
+  function skipIgnorable(html, index) {
+    let i = index;
+    while (i < html.length) {
+      if (/\s/.test(html[i])) { i += 1; continue; }
+      const ahead = html.slice(i, i + 4).toLowerCase();
+      if (ahead.startsWith('<p>') || ahead.startsWith('<p ')) {
+        const end = html.indexOf('>', i);
+        if (end < 0) break;
+        i = end + 1;
+        continue;
+      }
+      if (ahead === '</p>') { i += 4; continue; }
+      break;
+    }
+    return i;
+  }
+
+  function parseDt(html, index) {
+    const slice = html.slice(index);
+    const folder = slice.match(/^<DT>\s*<H3([^>]*)>([\s\S]*?)<\/H3>/i);
+    if (folder) {
+      const attrs = folder[1];
+      return {
+        length: folder[0].length,
+        node: {
+          title: decodeHtml(folder[2].trim()),
+          children: [],
+          toolbar: /PERSONAL_TOOLBAR_FOLDER\s*=\s*"true"/i.test(attrs),
+          unfiled: /UNFILED_BOOKMARKS_FOLDER\s*=\s*"true"/i.test(attrs),
+          mobile: /MOBILE_BOOKMARKS_FOLDER\s*=\s*"true"/i.test(attrs)
+        }
+      };
+    }
+    const link = slice.match(/^<DT>\s*<A\s+([^>]*)>([\s\S]*?)<\/A>/i);
+    if (!link) return null;
+    const href = link[1].match(/HREF\s*=\s*"([^"]*)"/i);
+    return {
+      length: link[0].length,
+      node: { title: decodeHtml(link[2].trim()), url: decodeHtml(href?.[1] || '') }
+    };
+  }
+
+  function parseDl(html, index) {
+    let i = html.indexOf('>', index) + 1;
+    const children = [];
+    while (i < html.length) {
+      i = skipIgnorable(html, i);
+      const ahead = html.slice(i, i + 5).toLowerCase();
+      if (ahead.startsWith('</dl>')) return { children, index: i + 5 };
+      if (ahead.startsWith('<dl')) {
+        const inner = parseDl(html, i);
+        const folder = [...children].reverse().find(item => !item.url);
+        if (folder) folder.children = inner.children;
+        i = inner.index;
+        continue;
+      }
+      if (ahead.startsWith('<dt>')) {
+        const item = parseDt(html, i);
+        if (!item) { i += 4; continue; }
+        children.push(item.node);
+        i += item.length;
+        continue;
+      }
+      if (!ahead) break;
+      i += 1;
+    }
+    return { children, index: i };
+  }
+
+  function parseNetscapeBookmarks(html) {
+    const start = String(html || '').search(/<DL[\s>]/i);
+    if (start < 0) throw new Error('这份备份不是收藏夹 HTML。');
+    const parsed = parseDl(html, start);
+    if (!parsed.children.length) throw new Error('这份备份里没有可恢复的目录。');
+    return parsed.children;
+  }
+
+  async function clearBookmarkChildren(api, parentId) {
+    const children = await api.getChildren(parentId);
+    for (const child of [...children].reverse()) {
+      if (!child.url) await clearBookmarkChildren(api, child.id);
+      await api.remove(child.id);
+    }
+  }
+
+  async function createBookmarkNode(api, parentId, node) {
+    const options = { parentId, title: node.title || '' };
+    if (node.url) options.url = node.url;
+    const created = await api.create(options);
+    for (const child of node.children || []) await createBookmarkNode(api, created.id, child);
+  }
+
+  async function replaceBookmarksFromHtml(html, api = chrome.bookmarks) {
+    const parsed = parseNetscapeBookmarks(html);
+    const toolbar = parsed.find(node => node.toolbar);
+    if (!toolbar) throw new Error('这份备份里没有收藏夹栏，已停止，收藏夹没有改变。');
+    const tree = await api.getTree();
+    const live = tree[0]?.children || [];
+    const bar = findBookmarkBar(tree);
+    if (!bar) throw new Error('没有找到当前的收藏夹栏，已停止，收藏夹没有改变。');
+    const unfiled = parsed.find(node => node.unfiled);
+    const mobile = parsed.find(node => node.mobile);
+    const unfiledLive = live.find(node => node.id !== bar.id && node.id !== '3' && !/移动设备|Mobile bookmarks/i.test(node.title || ''));
+    const mobileLive = live.find(node => node.id === '3' || /移动设备|Mobile bookmarks/i.test(node.title || ''));
+    const jobs = [{ parsed: toolbar, live: bar }];
+    if (unfiled && unfiledLive) jobs.push({ parsed: unfiled, live: unfiledLive });
+    if (mobile && mobileLive) jobs.push({ parsed: mobile, live: mobileLive });
+    for (const job of jobs) {
+      await clearBookmarkChildren(api, job.live.id);
+      for (const child of job.parsed.children || []) await createBookmarkNode(api, job.live.id, child);
+    }
+  }
+
+  function archiveDatabase() {
+    return new Promise((resolve, reject) => {
+      if (!globalThis.indexedDB) {
+        reject(new Error('indexedDB unavailable'));
+        return;
+      }
+      const request = globalThis.indexedDB.open('bookmark-organizer', 2);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('archives')) db.createObjectStore('archives');
+        if (!db.objectStoreNames.contains('handles')) db.createObjectStore('handles');
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async function rememberArchive(downloadId, html) {
+    const db = await archiveDatabase();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('archives', 'readwrite');
+      tx.objectStore('archives').put(html, String(downloadId));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }
+
+  async function saveArchiveDirectory(handle) {
+    const db = await archiveDatabase();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('handles', 'readwrite');
+      tx.objectStore('handles').put(handle, 'archives');
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }
+
+  async function loadArchiveDirectory() {
+    const db = await archiveDatabase();
+    const handle = await new Promise((resolve, reject) => {
+      const tx = db.transaction('handles', 'readonly');
+      const request = tx.objectStore('handles').get('archives');
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+    return handle;
+  }
+
+  async function loadArchive(downloadId) {
+    const db = await archiveDatabase();
+    const html = await new Promise((resolve, reject) => {
+      const tx = db.transaction('archives', 'readonly');
+      const request = tx.objectStore('archives').get(String(downloadId));
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+    return html;
+  }
+
   function bookmarksToNetscapeHtml(roots) {
     const rootFolders = roots.flatMap(root => root.children || []);
     const body = rootFolders.map((node, index) => bookmarkNodeToHtml(node, 1, rootFolderAttribute(node, index))).join('');
@@ -363,7 +547,28 @@
     if (supportsArchiveObjectUrl() && url.startsWith('blob:')) URL.revokeObjectURL(url);
   }
 
-  async function archiveCurrentBookmarks(timeoutMs = 30000) {
+  const archiveLabelKey = 'bookmarkOrganizerArchiveLabels';
+
+  async function archiveLabels() {
+    const stored = await chrome.storage.local.get({ [archiveLabelKey]: {} });
+    return stored[archiveLabelKey] || {};
+  }
+
+  async function setArchiveLabel(id, label) {
+    const text = String(label || '').trim().slice(0, 80);
+    const map = await archiveLabels();
+    if (text) map[String(id)] = text;
+    else delete map[String(id)];
+    await chrome.storage.local.set({ [archiveLabelKey]: map });
+  }
+
+  function defaultBackupName(date = new Date()) {
+    return new Intl.DateTimeFormat('zh-CN', {
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+    }).format(date);
+  }
+
+  async function archiveCurrentBookmarks(timeoutMs = 30000, label = '') {
     const roots = await chrome.bookmarks.getTree();
     const content = bookmarksToNetscapeHtml(roots);
     const stats = bookmarkTreeStats(roots);
@@ -377,6 +582,8 @@
         conflictAction: 'uniquify'
       });
       const item = await waitForDownload(downloadId, timeoutMs);
+      try { await rememberArchive(downloadId, content); } catch { /* 读不到本地库时，恢复时再读磁盘上的文件。 */ }
+      try { await setArchiveLabel(downloadId, label); } catch { /* 名称没写上时，列表仍显示时间。 */ }
       return { downloadId, filename: item.filename, createdAt, ...stats };
     } finally {
       releaseArchiveUrl(archiveUrl);
@@ -606,8 +813,17 @@
     findBookmarkBar,
     findTemporaryFolder,
     bookmarksToNetscapeHtml,
+    parseNetscapeBookmarks,
+    replaceBookmarksFromHtml,
+    rememberArchive,
+    loadArchive,
+    saveArchiveDirectory,
+    loadArchiveDirectory,
     bookmarkTreeStats,
     archiveCurrentBookmarks,
+    archiveLabels,
+    setArchiveLabel,
+    defaultBackupName,
     waitForDownload,
     archiveDiagnostics,
     idsUnder,

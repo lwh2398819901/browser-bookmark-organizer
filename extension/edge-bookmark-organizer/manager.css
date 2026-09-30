@@ -20,6 +20,13 @@ h2 { margin: 2px 0 5px; font-size: 21px; letter-spacing: -.015em; }
 .lead, .section-heading p, .advanced p { color: var(--muted); margin-bottom: 0; }
 .eyebrow { margin-bottom: 3px; color: var(--accent); font-size: 12px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
 .version { border: 1px solid var(--border); border-radius: 999px; padding: 5px 10px; color: var(--muted); font-size: 12px; }
+.header-tools { display: flex; align-items: center; gap: 8px; }
+dialog.help { width: min(640px, calc(100% - 32px)); max-height: min(720px, calc(100% - 32px)); overflow: auto; border: 1px solid var(--border); border-radius: 16px; padding: 22px; background: Canvas; color: CanvasText; }
+dialog.help::backdrop { background: color-mix(in srgb, CanvasText 28%, transparent); }
+dialog.help h3 { margin: 18px 0 6px; font-size: 16px; }
+dialog.help p { color: var(--muted); }
+dialog.help ul { margin: 0; padding-left: 18px; }
+dialog.help li { margin: 6px 0; }
 .overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
 .metric, .panel { border: 1px solid var(--border); background: Canvas; }
 .metric { border-radius: 12px; padding: 15px 18px; }
@@ -45,8 +52,11 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 .archive-item, .bookmark-item, .plan-item, .history-item { display: grid; gap: 10px; border-top: 1px solid var(--border); padding: 15px 0 4px; }
 .archive-item { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .item-title { margin: 0; font-weight: 700; }
+input.archive-name { width: 100%; margin: 0; padding: 2px 0; border: 0; border-radius: 0; background: transparent; font-weight: 700; font-size: 15px; }
+input.archive-name:hover, input.archive-name:focus { padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .item-meta { margin: 3px 0 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .archive-actions { display: flex; gap: 8px; }
+.restore-choice { grid-column: 1 / -1; display: grid; gap: 8px; }
 .empty { color: var(--muted); }
 .restore-guide { margin-top: 16px; border-left: 4px solid var(--accent); border-radius: 8px; padding: 14px 16px; background: var(--surface); }
 .restore-guide p, .restore-guide ol { margin-bottom: 8px; }

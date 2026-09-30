@@ -11,6 +11,8 @@
   const addButton = document.querySelector('#add-temporary');
   const temporaryCount = document.querySelector('#temporary-count');
   const duplicateCount = document.querySelector('#duplicate-count');
+  const duplicateMetric = document.querySelector('#duplicate-metric');
+  const duplicateList = document.querySelector('#duplicate-list');
   const backupButton = document.querySelector('#backup');
   const backupStatus = document.querySelector('#backup-status');
   const latestBackup = document.querySelector('#latest-backup');
@@ -18,17 +20,79 @@
   const closePopupButton = document.querySelector('#close-popup');
   let currentTab = null;
   let buttonMode = 'add';
-  let siteSampleItems = [];
+  let sitePages = [];
+  let duplicateItems = [];
+  let duplicatesOpen = false;
 
   function setState(element, text, kind = '') {
     element.textContent = text;
     element.className = `state${kind ? ` ${kind}` : ''}`;
   }
 
+  function folderPath(bookmark) {
+    const folders = (bookmark.path || []).slice(0, -1);
+    return folders.length ? folders.join(' / ') : '收藏夹栏';
+  }
+
   function duplicateGroups(bookmarks) {
-    const counts = new Map();
-    for (const bookmark of bookmarks) counts.set(bookmark.canonical, (counts.get(bookmark.canonical) || 0) + 1);
-    return [...counts.values()].filter(count => count > 1).length;
+    const groups = new Map();
+    for (const bookmark of bookmarks) {
+      const copies = groups.get(bookmark.canonical) || [];
+      copies.push(bookmark);
+      groups.set(bookmark.canonical, copies);
+    }
+    return [...groups.values()].filter(copies => copies.length > 1).map(copies => ({
+      title: copies.find(item => item.title)?.title || copies[0].url,
+      url: copies[0].url,
+      folders: copies.map(folderPath)
+    }));
+  }
+
+  async function openBookmark(url) {
+    await chrome.tabs.create({ url });
+    window.close();
+  }
+
+  function bookmarkLink(title, url) {
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'bookmark-link';
+    link.textContent = title;
+    link.setAttribute('aria-label', `打开 ${title}`);
+    link.addEventListener('click', () => openBookmark(url));
+    return link;
+  }
+
+  async function removeDuplicateGroup(group, button) {
+    button.disabled = true;
+    try {
+      const roots = await chrome.bookmarks.getTree();
+      const matches = matchingBookmarks(core.collectBookmarks(roots).bookmarks, group.url);
+      for (const item of matches) await chrome.bookmarks.remove(item.id);
+      const refreshed = await refreshSummary();
+      if (currentTab?.url && /^https?:/i.test(currentTab.url)) paintPage(refreshed.collected.bookmarks);
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = '取消失败';
+    }
+  }
+
+  function paintDuplicateList() {
+    duplicateList.replaceChildren(...duplicateItems.map(group => {
+      const item = document.createElement('li');
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'inline-danger';
+      remove.textContent = '取消收藏';
+      remove.addEventListener('click', () => removeDuplicateGroup(group, remove));
+      item.append(bookmarkLink(group.title, group.url), ...group.folders.map(path => {
+        const line = document.createElement('p');
+        line.className = 'muted';
+        line.textContent = path;
+        return line;
+      }), remove);
+      return item;
+    }));
   }
 
   function matchingBookmarks(bookmarks, url) {
@@ -59,9 +123,9 @@
 
   function renderSite(bookmarks, url, pageSaved) {
     const footprint = core.siteFootprint(bookmarks, url);
-    siteSampleItems = footprint.samples;
+    sitePages = footprint.pages;
     siteLine.hidden = false;
-    siteLine.disabled = siteSampleItems.length === 0;
+    siteLine.disabled = sitePages.length < 2;
     siteLine.textContent = siteSentence(footprint, pageSaved);
     siteLine.setAttribute('aria-expanded', 'false');
     siteSamples.hidden = true;
@@ -87,7 +151,13 @@
     const collected = core.collectBookmarks(roots);
     const temporary = core.findTemporaryFolder(roots);
     temporaryCount.textContent = String(bookmarksInside(temporary).length);
-    duplicateCount.textContent = String(duplicateGroups(collected.bookmarks));
+    duplicateItems = duplicateGroups(collected.bookmarks);
+    duplicateCount.textContent = String(duplicateItems.length);
+    duplicateMetric.disabled = duplicateItems.length === 0;
+    if (!duplicateItems.length) duplicatesOpen = false;
+    duplicateList.hidden = !duplicatesOpen;
+    duplicateMetric.setAttribute('aria-expanded', duplicatesOpen ? 'true' : 'false');
+    if (duplicatesOpen) paintDuplicateList();
     return { roots, collected, temporary };
   }
 
@@ -177,7 +247,7 @@
   backupButton.addEventListener('click', async () => {
     try {
       backupButton.disabled = true;
-      setState(backupStatus, '正在备份全部收藏夹…');
+      setState(backupStatus, '请确认这次备份的名称…');
       const response = await chrome.runtime.sendMessage({
         channel: 'bookmark-organizer-popup',
         request: { command: 'backup' }
@@ -201,17 +271,28 @@
     window.close();
   });
 
+  duplicateMetric.addEventListener('click', () => {
+    if (!duplicateItems.length) return;
+    duplicatesOpen = !duplicatesOpen;
+    duplicateList.hidden = !duplicatesOpen;
+    duplicateMetric.setAttribute('aria-expanded', duplicatesOpen ? 'true' : 'false');
+    if (duplicatesOpen) paintDuplicateList();
+  });
+
   siteLine.addEventListener('click', () => {
-    if (!siteSampleItems.length) return;
+    if (sitePages.length < 2) return;
     const willOpen = siteSamples.hidden;
     siteLine.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
     if (!willOpen) {
       siteSamples.hidden = true;
       return;
     }
-    siteSamples.replaceChildren(...siteSampleItems.map(sample => {
+    siteSamples.replaceChildren(...sitePages.map(page => {
       const item = document.createElement('li');
-      item.textContent = `${sample.title} · ${sample.folder}`;
+      const path = document.createElement('p');
+      path.className = 'muted';
+      path.textContent = page.path;
+      item.append(bookmarkLink(page.title, page.url), path);
       return item;
     }));
     siteSamples.hidden = false;

@@ -322,6 +322,25 @@ async function testManager() {
   if (context.confirmCalls !== 0) throw new Error('Manager used a blocking confirmation dialog.');
 }
 
+async function testRestoreReplacesBookmarkTree() {
+  const context = makeEnvironment();
+  load(context, extensionFile('shared.js'));
+  const html = context.BookmarkOrganizerCore.bookmarksToNetscapeHtml(context.tree);
+  context.findNode('11').children.push({ id: '12', parentId: '11', index: 0, title: 'Extra', url: 'https://extra.test/' });
+  let rejected = false;
+  try {
+    await context.BookmarkOrganizerCore.replaceBookmarksFromHtml('<html></html>', context.chrome.bookmarks);
+  } catch {
+    rejected = true;
+  }
+  if (!rejected || !context.findNode('12')) throw new Error('Invalid backup changed bookmarks.');
+  await context.BookmarkOrganizerCore.replaceBookmarksFromHtml(html, context.chrome.bookmarks);
+  const titles = context.BookmarkOrganizerCore.collectBookmarks(context.tree).bookmarks.map(item => item.title);
+  if (titles.includes('Extra') || !titles.includes('Example')) {
+    throw new Error(`Restore did not replace the current bookmarks: ${titles.join(', ')}`);
+  }
+}
+
 async function testPopupDuplicateGuard() {
   const context = makeEnvironment('https://new.example.test/article');
   load(context, extensionFile('shared.js'));
@@ -361,8 +380,45 @@ async function testPopupSiteFootprint() {
   }
   await line.listeners.click();
   const samples = context.elements.get('#site-samples');
-  if (samples.hidden || !samples.children.some(item => item.textContent.includes('另一篇'))) {
-    throw new Error('Site footprint did not expand related pages.');
+  const listed = textOf(samples);
+  if (samples.hidden || !listed.includes('另一篇') || !listed.includes('收藏夹栏 / 远程工作') || !listed.includes('Example') || !listed.includes('收藏夹栏 / 临时收藏')) {
+    throw new Error(`Site footprint did not expand the saved pages: ${listed}`);
+  }
+  await findButton(samples, '另一篇').listeners.click();
+  if (!context.chrome.tabs.created.some(item => item.url === 'https://example.test/other')) {
+    throw new Error('Clicking a saved page did not open it.');
+  }
+}
+
+async function testPopupDuplicateDetails() {
+  const context = makeEnvironment('https://new.example.test/article');
+  context.findNode('11').children.push({
+    id: '12', parentId: '11', index: 0, title: 'Example again', url: 'https://example.test/?b=2&a=1&utm_source=x'
+  });
+  load(context, extensionFile('shared.js'));
+  vm.runInContext(fs.readFileSync(extensionFile('popup.js'), 'utf8'), context);
+  await tick();
+  const metric = context.elements.get('#duplicate-metric');
+  const list = context.elements.get('#duplicate-list');
+  if (context.elements.get('#duplicate-count').textContent !== '1' || metric.disabled || !list.hidden) {
+    throw new Error('The repeated link was not offered as a collapsed detail.');
+  }
+  await metric.listeners.click();
+  const listed = textOf(list);
+  if (list.hidden || metric['aria-expanded'] !== 'true' || !listed.includes('Example') || !listed.includes('收藏夹栏 / 临时收藏') || !listed.includes('收藏夹栏 / 开发')) {
+    throw new Error(`Duplicate details did not name the link and both folders: ${listed}`);
+  }
+  await findButton(list, 'Example').listeners.click();
+  if (!context.chrome.tabs.created.some(item => item.url === 'https://example.test/?a=1&b=2')) {
+    throw new Error('Clicking the repeated link did not open it.');
+  }
+  await findButton(list, '取消收藏').listeners.click();
+  const remaining = context.BookmarkOrganizerCore.collectBookmarks(context.tree).bookmarks;
+  if (remaining.some(item => item.canonical === context.BookmarkOrganizerCore.canonicalUrl('https://example.test/?a=1&b=2'))) {
+    throw new Error('Unbookmark from the duplicate list left a copy.');
+  }
+  if (context.elements.get('#duplicate-count').textContent !== '0') {
+    throw new Error('Duplicate count did not clear after unbookmark.');
   }
 }
 
@@ -461,9 +517,11 @@ async function testUndoSkipsDeletedBookmarks() {
 }
 
 (async () => {
+  await testRestoreReplacesBookmarkTree();
   await testManager();
   await testPopupDuplicateGuard();
   await testPopupSiteFootprint();
+  await testPopupDuplicateDetails();
   await testPopupUnbookmark();
   await testUndoRestoresOriginalOrder();
   await testUndoSkipsDeletedBookmarks();

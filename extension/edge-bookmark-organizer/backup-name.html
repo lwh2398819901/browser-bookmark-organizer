@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>备份名称</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font: 14px/1.45 "Segoe UI Variable", "Microsoft YaHei UI", system-ui, sans-serif;
+      --accent: #176b5b;
+      --accent-hover: #125548;
+      --border: color-mix(in srgb, CanvasText 16%, transparent);
+      --muted: color-mix(in srgb, CanvasText 58%, transparent);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; overflow: hidden; background: Canvas; color: CanvasText; }
+    main { padding: 18px 18px 16px; }
+    h1 { margin: 0 0 4px; font-size: 16px; font-weight: 700; letter-spacing: 0; }
+    p { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+    input { width: 100%; margin: 0 0 14px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; background: Canvas; color: CanvasText; font: inherit; }
+    input:focus { outline: none; border-color: var(--accent); }
+    .actions { display: flex; justify-content: flex-end; gap: 8px; }
+    button { min-height: 34px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px; background: Canvas; color: CanvasText; font: inherit; cursor: pointer; }
+    button:hover { border-color: var(--accent); }
+    button.primary { border-color: var(--accent); background: var(--accent); color: white; }
+    button.primary:hover { background: var(--accent-hover); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>这次备份的名称</h1>
+    <p>默认是当前时间，可以直接确定。</p>
+    <input id="name" type="text" maxlength="80" aria-label="备份名称">
+    <div class="actions">
+      <button id="cancel" type="button">取消</button>
+      <button id="ok" class="primary" type="button">确定</button>
+    </div>
+  </main>
+  <script src="backup-name.js"></script>
+</body>
+</html>
