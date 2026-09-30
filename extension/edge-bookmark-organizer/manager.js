@@ -333,6 +333,56 @@
     if (message) setMessage(result, message);
   }
 
+  function joinPath(value) {
+    if (Array.isArray(value)) return value.filter(Boolean).join(' / ');
+    return String(value || '').split('/').filter(Boolean).join(' / ');
+  }
+
+  function describeMove(move) {
+    const title = move.title || move.url || move.id;
+    const from = joinPath(move.fromPath);
+    const destination = joinPath(move.toPath || move.folderPath);
+    const effects = {
+      move: ['移动到', destination],
+      delete: ['移入', destination || '回收站'],
+      purge: ['删除', '永久删除'],
+      deleteFolder: ['整目录移入', destination || '回收站'],
+      purgeFolder: ['删除', '永久删除目录'],
+      renameFolder: ['重命名为', move.name || ''],
+      moveFolder: ['移动到', destination]
+    };
+    const [effect, target] = effects[move.action] || ['变更', destination];
+    let note = '';
+    if (move.state === 'pending') note = '未完成';
+    else if (move.undoState === 'missing') note = '撤销时已不存在';
+    else if (move.undoState && move.undoState !== 'restored') note = '撤销未完成';
+    return { title, from, effect, target, url: move.url || '', note };
+  }
+
+  function renderMoveDetails(operation) {
+    const details = createElement('div', 'history-details');
+    details.hidden = true;
+    if (!operation.moves?.length) {
+      details.append(createElement('p', 'empty', '这次记录没有逐条变更。'));
+      return details;
+    }
+    for (const move of operation.moves) {
+      const described = describeMove(move);
+      const row = createElement('article', 'history-change');
+      const from = createElement('div', 'path-box');
+      from.append(createElement('small', '', described.title));
+      from.append(document.createTextNode(described.from || '原位置未知'));
+      if (described.url) from.append(createElement('p', 'item-meta', described.url));
+      const to = createElement('div', 'path-box');
+      to.append(createElement('small', '', described.effect));
+      to.append(document.createTextNode(described.target || described.effect));
+      if (described.note) to.append(createElement('p', 'item-meta', described.note));
+      row.append(from, createElement('div', 'arrow', '→'), to);
+      details.append(row);
+    }
+    return details;
+  }
+
   async function renderHistory() {
     historyList.replaceChildren(createElement('p', 'empty', '正在读取操作记录…'));
     const operations = await operationStore.load();
@@ -344,20 +394,35 @@
     const latestActiveId = operations.find(operation => !operation.undoneAt)?.id;
     for (const operation of operations) {
       const row = createElement('article', `history-item${operation.undoneAt ? ' undone' : ''}`);
+      const main = createElement('div', 'history-main');
       const content = createElement('div');
       content.append(createElement('p', 'item-title', `${core.formatDate(operation.createdAt)} · 已处理 ${operation.moves.filter(item => item.state !== 'pending').length} 条，待核对 ${operation.moves.filter(item => item.state === 'pending').length} 条`));
       const state = operation.undoneAt ? `已于 ${core.formatDate(operation.undoneAt)} 撤销` : operation.undoStatus === 'partial' ? '撤销有冲突，请查看操作详情' : operation.status === 'complete' ? '已完成' : '未完成，需核对逐项记录';
       content.append(createElement('p', 'item-meta', state));
       for (const conflict of operation.undoConflicts || []) content.append(createElement('p', 'item-meta', `条目 ${conflict.id}：${conflict.error}`));
       content.append(createElement('p', 'item-meta', `整理前备份：${operation.archivePath}`));
-      row.append(content);
+      const actions = createElement('div', 'history-actions');
+      const details = renderMoveDetails(operation);
+      if (operation.moves?.length) {
+        const toggle = createElement('button', '', '详情');
+        toggle.setAttribute('aria-expanded', 'false');
+        toggle.addEventListener('click', () => {
+          details.hidden = !details.hidden;
+          const open = !details.hidden;
+          toggle.textContent = open ? '收起' : '详情';
+          toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+        actions.append(toggle);
+      }
       if (!operation.undoneAt && operation.moves.length && operation.id === latestActiveId) {
         const undo = createElement('button', '', '撤销本次整理');
         undo.addEventListener('click', () => undoOperation(operation.id, undo));
-        row.append(undo);
+        actions.append(undo);
       } else if (!operation.undoneAt && operation.moves.length) {
-        row.append(createElement('span', 'item-meta', '请先撤销较新的整理'));
+        actions.append(createElement('span', 'item-meta', '请先撤销较新的整理'));
       }
+      main.append(content, actions);
+      row.append(main, details);
       historyList.append(row);
     }
   }

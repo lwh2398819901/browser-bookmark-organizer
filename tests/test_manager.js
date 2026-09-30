@@ -214,6 +214,23 @@ function findButton(root, text) {
   return found;
 }
 
+function findByClass(root, className) {
+  let found = null;
+  const visit = node => {
+    if (!(node instanceof FakeElement) || found) return;
+    if (String(node.className || '').split(/\s+/).includes(className)) found = node;
+    node.children.forEach(visit);
+  };
+  visit(root);
+  return found;
+}
+
+function textOf(node) {
+  if (!node) return '';
+  if (!(node instanceof FakeElement)) return String(node.textContent || '');
+  return `${node.textContent || ''}${node.children.map(textOf).join('')}`;
+}
+
 async function tick() {
   await new Promise(resolve => setTimeout(resolve, 0));
 }
@@ -281,7 +298,21 @@ async function testManager() {
   if (context.findNode('10').parentId !== '11') throw new Error(`Plan did not move the bookmark: ${context.elements.get('#result').textContent}`);
   if (!context.storageData.bookmarkOrganizerOperations?.length) throw new Error('Operation history was not saved.');
 
-  const undoButton = findButton(context.elements.get('#history-list'), '撤销本次整理');
+  const history = context.elements.get('#history-list');
+  const detailButton = findButton(history, '详情');
+  const details = findByClass(history, 'history-details');
+  if (!detailButton || !details?.hidden) throw new Error('History details were not collapsed behind a detail button.');
+  await detailButton.listeners.click();
+  const detailText = textOf(details);
+  if (details.hidden || detailButton.textContent !== '收起' || detailButton['aria-expanded'] !== 'true') {
+    throw new Error('History detail button did not expand the change list.');
+  }
+  if (!detailText.includes('Example') || !detailText.includes('临时收藏') || !detailText.includes('开发') || !detailText.includes('https://example.test/?a=1&b=2')) {
+    throw new Error(`History details did not show the move: ${detailText}`);
+  }
+  await detailButton.listeners.click();
+  if (!details.hidden || detailButton.textContent !== '详情') throw new Error('History detail button did not collapse.');
+  const undoButton = findButton(history, '撤销本次整理');
   if (!undoButton) throw new Error('Undo action was not rendered.');
   await undoButton.listeners.click();
   if (context.findNode('10').parentId !== '9') throw new Error(`Undo did not restore the original folder: ${context.elements.get('#result').textContent}`);
