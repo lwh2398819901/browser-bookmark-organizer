@@ -27,6 +27,7 @@ dialog.help h3 { margin: 18px 0 6px; font-size: 16px; }
 dialog.help p { color: var(--muted); }
 dialog.help ul { margin: 0; padding-left: 18px; }
 dialog.help li { margin: 6px 0; }
+dialog.help code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 0.92em; }
 .overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
 .metric, .panel { border: 1px solid var(--border); background: Canvas; }
 .metric { border-radius: 12px; padding: 15px 18px; }
